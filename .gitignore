@@ -1,0 +1,11 @@
+/.claude/
+/.data/
+/.idea/
+.env
+
+/data/*.osm.pbf
+/data/*.osm.pbf.part
+
+docker-compose.override.yml
+
+__pycache__/

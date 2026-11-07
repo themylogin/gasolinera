@@ -1,0 +1,135 @@
+# -*- coding=utf-8 -*-
+import datetime
+from decimal import Decimal
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from .. import journey
+from ..models import GasStation
+from ..opening_hours import OpeningState
+from ..refuel import Listed, NoStop, Stops
+
+MADRID = ZoneInfo("Europe/Madrid")
+
+
+def listed(name="REPSOL", price="1.689", field="Precio Gasoleo A", distance_m=312400.0, detour_s=185.0,
+           state=OpeningState("open"), hours="L-D: 24H", arrival=datetime.datetime(2026, 11, 7, 21, 45, tzinfo=MADRID)):
+    station = GasStation(id=1, latitude=39.211417, longitude=-1.539167, name=name, opening_hours=hours,
+                         province="MADRID")
+    return Listed(station=station, field=field, price=Decimal(price), distance_m=distance_m, detour_s=detour_s,
+                  arrival=arrival, cost=0.0, state=state)
+
+
+def station_block(entry):
+    return journey.format_answer(Stops(liters=45.0, stations=(entry,)), "Diésel")
+
+
+@pytest.mark.parametrize("text, location", [
+    ("40.4168, -3.7038", (-3.7038, 40.4168)),
+    ("-28.1, -15.4", (-15.4, -28.1)),
+    ("Estoy en 41.3874,2.1686 ahora", (2.1686, 41.3874)),
+])
+def test_typed_coordinates(text, location):
+    assert journey.parse_location(text) == location
+
+
+def test_a_decimal_comma_reads_as_coordinates():
+    # This is why the bot reads liters first when the fuel question is open.
+    assert journey.parse_location("12,5") == (5.0, 12.0)
+
+
+@pytest.mark.parametrize("text", ["hola", "40.4", "95.0, 3.0", "40.0, 190.0"])
+def test_text_that_is_no_location(text):
+    assert journey.parse_location(text) is None
+
+
+@pytest.mark.parametrize("text, liters", [("12,5", 12.5), ("10", 10.0), (" 0 ", 0.0), ("50", 50.0), ("7.25", 7.25)])
+def test_liters(text, liters):
+    assert journey.parse_liters(text, 50) == liters
+
+
+@pytest.mark.parametrize("text", ["60", "50,1", "-1", "diez", "", "40.42, -3.70"])
+def test_wrong_liters(text):
+    assert journey.parse_liters(text, 50) is None
+
+
+def test_the_liters_error_names_the_tank_volume():
+    assert journey.liters_error(50) == "Los litros deben ser un número de 0 a 50, por ejemplo 12,5. Escríbelo de nuevo."
+
+
+def test_the_info_text():
+    assert journey.INFO == (
+        "Este bot busca dónde repostar más barato en tu ruta por España.\n"
+        "\n"
+        "1. Configura tu coche con /coche.\n"
+        "2. Envíame tu ubicación actual.\n"
+        "3. Envíame el destino.\n"
+        "4. Dime cuántos litros te quedan.\n"
+        "\n"
+        "Te mostraré las 10 paradas más baratas, contando el combustible y el tiempo del desvío, y te avisaré si "
+        "una gasolinera estará cerrada o a punto de cerrar cuando llegues.\n"
+        "\n"
+        "/coche: configurar tu coche\n"
+        "/reiniciar: empezar de nuevo\n"
+        "/info: esta información\n"
+        "\n"
+        "Puedes decirme gracias aquí: https://buymeacoffee.com/themylogin o https://paypal.me/themyloginspain"
+    )
+
+
+def test_no_stop_is_needed():
+    assert journey.format_answer(NoStop(fuel_left=12.7), "Diésel") == "No necesitas repostar: llegarás con 12 L."
+
+
+def test_no_station_is_near():
+    assert journey.format_answer(Stops(liters=45.0, stations=()), "Diésel") == (
+        "Ninguna gasolinera vende Diésel a menos de 50 km del punto donde el depósito llega a 5 L.")
+
+
+def test_the_stations_start_the_message():
+    text = journey.format_answer(Stops(liters=44.6, stations=(listed(),) * 10), "Gasolina 95")
+
+    assert text.startswith("1. <a ")
+    assert "\n\n10. <a " in text
+
+
+def test_one_open_station():
+    entry = listed(name="GALP", price="1.499", distance_m=410300.0, detour_s=100.0)
+
+    assert station_block(entry) == (
+        '1. <a href="https://www.google.com/maps/search/?api=1&amp;query=39.211417%2C-1.539167">GALP</a>'
+        " · 410 km\n"
+        "1,499 €/L · +2 min"
+    )
+
+
+def test_a_shorter_route_through_the_station():
+    assert station_block(listed(detour_s=-70.0)).endswith(" · -1 min")
+
+
+def test_a_name_with_html_characters():
+    assert ">A&amp;B &lt;24h&gt;</a>" in station_block(listed(name="A&B <24h>"))
+
+
+def test_no_name():
+    assert ">Gasolinera sin nombre</a>" in station_block(listed(name=""))
+
+
+def test_closed():
+    arrival = datetime.datetime(2026, 11, 7, 22, 41, tzinfo=MADRID)
+
+    assert station_block(listed(state=OpeningState("closed"), arrival=arrival)).endswith(
+        "\n⚠️ <b>Cerrada</b> a las 22:41")
+
+
+def test_closing_soon():
+    state = OpeningState("closing_soon", datetime.datetime(2026, 11, 7, 22, 0, tzinfo=MADRID))
+
+    assert station_block(listed(state=state)).endswith("\n⚠️ <b>Cierra pronto</b> a las 22:00")
+
+
+@pytest.mark.parametrize("hours", ["L: 24H", ""])
+def test_an_unknown_schedule(hours):
+    assert station_block(listed(state=OpeningState("unknown"), hours=hours)).endswith(
+        "\n⚠️ <b>Horario desconocido</b>")

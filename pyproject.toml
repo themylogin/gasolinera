@@ -1,0 +1,14 @@
+[project]
+name = "gasolinera"
+version = "0.0.0"
+description = "Fuel stations along routes across Spain, as a Telegram bot"
+requires-python = ">=3.11"
+
+dependencies = [
+    "aiosqlite",
+    "alembic",
+    "httpx",
+    "pytest",
+    "python-telegram-bot~=21.0",
+    "SQLAlchemy[asyncio]>=2",
+]

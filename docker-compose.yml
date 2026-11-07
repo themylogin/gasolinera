@@ -1,0 +1,75 @@
+services:
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:26.8-debian
+    command: osrm-routed --algorithm mld /osrm/spain-latest.osrm
+    volumes:
+      - type: bind
+        source: ${OSRM_PATH:-/OSRM_PATH-is-unset}
+        target: /osrm
+        bind:
+          create_host_path: false
+    restart: always
+
+  migrate:
+    build: .
+    command: alembic upgrade head
+    volumes:
+      - "cache:/cache"
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    restart: "no"
+    profiles: ["app", "test", "gas-stations"]
+
+  bot:
+    build: .
+    command: python3 -m gasolinera.bot
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - "cache:/cache"
+    env_file: .env
+    restart: unless-stopped
+    profiles: ["app"]
+
+  # Tools
+
+  osrm-tools:
+    image: ghcr.io/project-osrm/osrm-backend:26.8-debian
+    volumes:
+      - type: bind
+        source: ${OSRM_PATH:-/OSRM_PATH-is-unset}
+        target: /osrm
+        bind:
+          create_host_path: false
+    profiles: ["tools"]
+
+  download:
+    image: curlimages/curl:8.23.0
+    volumes:
+      - "./data:/data"
+    profiles: ["tools"]
+
+  gas-stations:
+    build: .
+    entrypoint: ["python3", "-m", "gasolinera.gas_stations"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - "cache:/cache"
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    profiles: ["gas-stations"]
+
+  # Developer tools
+
+  tests:
+    build: .
+    command: python3 -m pytest -q -p no:cacheprovider /app/gasolinera/tests
+    tmpfs:
+      - /cache
+    profiles: ["test"]
+
+volumes:
+  cache:
