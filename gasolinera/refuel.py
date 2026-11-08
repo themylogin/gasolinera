@@ -14,8 +14,8 @@ from .models import GasStation
 from .opening_hours import OpeningState, state_at
 from .osrm import NoRoute
 
-__all__ = ["Candidate", "Listed", "NoStop", "Stops", "candidates", "consumption_at", "fuel_walk", "range_walk",
-           "search", "segment_speed", "station_link", "station_zone", "stop_cost"]
+__all__ = ["Candidate", "Listed", "Nearby", "NoStop", "Stops", "candidates", "consumption_at", "fuel_walk", "nearby",
+           "range_walk", "search", "segment_speed", "station_link", "station_zone", "stop_cost"]
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,16 @@ class Listed:
     # In the time zone of the station.
     arrival: datetime.datetime
     cost: float
+    state: OpeningState
+
+
+@dataclass(frozen=True)
+class Nearby:
+    station: GasStation
+    price: Decimal
+    distance_km: float
+    # In the time zone of the station.
+    local_time: datetime.datetime
     state: OpeningState
 
 
@@ -120,6 +130,20 @@ async def candidates(position, fuel_type):
 
     found.sort(key=lambda candidate: (candidate.distance_km, candidate.station.id))
     return found[:30]
+
+
+async def nearby(position, fuel_type, now):
+    """The 10 stations nearest to a `[longitude, latitude]` position that sell a fuel of the group.
+
+    `now` is an aware datetime.
+    """
+    found = []
+    for candidate in (await candidates(position, fuel_type))[:10]:
+        station = candidate.station
+        local_time = now.astimezone(station_zone(station.province))
+        found.append(Nearby(station=station, price=candidate.price, distance_km=candidate.distance_km,
+                            local_time=local_time, state=state_at(station.opening_hours, local_time)))
+    return tuple(found)
 
 
 def _great_circle_km(latitude_a, longitude_a, latitude_b, longitude_b):

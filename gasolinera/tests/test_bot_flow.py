@@ -895,3 +895,132 @@ def test_a_toll_button_after_reiniciar(store, osrm):
 
     assert chat.texts()[-1] == EXPIRED_GAUGE
     assert gauges(chat) == []
+
+
+def nearby_questions(chat):
+    return [sent for sent in chat.sent
+            if sent.method == "sendMessage" and any(button["callback_data"].startswith("nearby:")
+                                                     for row in (sent.markup or {}).get("inline_keyboard", [])
+                                                     for button in row)]
+
+
+async def press_nearby(chat, question=-1):
+    message = nearby_questions(chat)[question]
+    await chat.press(message.markup["inline_keyboard"][0][0]["callback_data"], message.message_id)
+
+
+def test_the_destination_question_offers_the_nearby_stations(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await chat.send_location(ORIGIN)
+
+    [question] = nearby_questions(talk(osrm, scenario))
+    assert question.text == "Ahora envíame el destino."
+    assert [[button["text"] for button in row] for row in question.markup["inline_keyboard"]] == [
+        ["o mostrar gasolineras cercanas"]]
+
+
+def test_a_press_lists_the_nearby_stations(store, osrm):
+    store_car(store)
+    store_station(store)
+
+    async def scenario(chat):
+        await chat.send_location(ORIGIN)
+        await press_nearby(chat)
+
+    chat = talk(osrm, scenario)
+
+    [question] = nearby_questions(chat)
+    [edit] = [sent for sent in chat.sent if sent.method == "editMessageReplyMarkup"]
+    assert edit.message_id == question.message_id
+    assert not edit.markup
+    assert chat.texts()[0] == "Ahora envíame el destino."
+    answer = chat.sent[-1]
+    assert answer.text.startswith("1. <a ")
+    assert answer.text.split("\n")[0].endswith("· 0,0 km")
+    assert answer.text.split("\n")[1] == "1,689 €/L"
+    assert answer.parameters["parse_mode"] == "HTML"
+    assert answer.parameters["link_preview_options"] == {"is_disabled": True}
+    assert route_requests(osrm) == 0
+
+
+def test_the_nearby_list_ends_the_journey(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await chat.send_location(ORIGIN)
+        await press_nearby(chat)
+        await chat.send_location(DESTINATION)
+
+    assert talk(osrm, scenario).texts()[-1] == "Ahora envíame el destino."
+
+
+def test_a_nearby_press_after_the_destination(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await press_nearby(chat)
+        await chat.press_labelled("1/4")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts() == ["Ahora envíame el destino.", "Combustible: 1/4 (12,5 L)", "Esta pregunta ha caducado.",
+                            "No necesitas repostar: llegarás con 12 L."]
+
+
+def test_a_nearby_press_on_the_first_origin_after_a_new_origin(store, osrm):
+    store_car(store)
+    store_station(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.send_location(ORIGIN)
+        await press_nearby(chat, question=0)
+        await press_nearby(chat, question=1)
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[-2] == "Esta pregunta ha caducado."
+    assert chat.sent[-1].text.startswith("1. <a ")
+
+
+def test_a_nearby_press_after_reiniciar(store, osrm):
+    store_car(store)
+    store_station(store)
+
+    async def scenario(chat):
+        await chat.send_location(ORIGIN)
+        await chat.send_command("reiniciar")
+        await press_nearby(chat)
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts() == ["Ahora envíame el destino.", "Envíame tu ubicación actual.", "Esta pregunta ha caducado."]
+
+
+def test_a_second_press_on_one_nearby_button(store, osrm):
+    store_car(store)
+    store_station(store)
+
+    async def scenario(chat):
+        await chat.send_location(ORIGIN)
+        await press_nearby(chat)
+        await press_nearby(chat)
+
+    texts = talk(osrm, scenario).texts()
+
+    assert len(texts) == 3
+    assert texts[1].startswith("1. <a ")
+    assert texts[2] == "Esta pregunta ha caducado."
+
+
+def test_no_nearby_station(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await chat.send_location(ORIGIN)
+        await press_nearby(chat)
+
+    assert talk(osrm, scenario).texts()[-1] == "Ninguna gasolinera vende Diésel a menos de 50 km de tu ubicación."

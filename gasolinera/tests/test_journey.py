@@ -8,7 +8,7 @@ import pytest
 from .. import journey
 from ..models import GasStation
 from ..opening_hours import OpeningState
-from ..refuel import Listed, NoStop, Stops
+from ..refuel import Listed, Nearby, NoStop, Stops
 
 MADRID = ZoneInfo("Europe/Madrid")
 
@@ -189,3 +189,49 @@ def test_closing_soon():
 def test_an_unknown_schedule(hours):
     assert station_block(listed(state=OpeningState("unknown"), hours=hours)).endswith(
         "\n⚠️ <b>Horario desconocido</b>")
+
+
+def nearby(name="GALP", price="1.499", distance_km=0.43, state=OpeningState("open"),
+           local_time=datetime.datetime(2026, 11, 7, 22, 41, tzinfo=MADRID)):
+    station = GasStation(id=1, latitude=39.211417, longitude=-1.539167, name=name, opening_hours="L-D: 24H",
+                         province="MADRID")
+    return Nearby(station=station, price=Decimal(price), distance_km=distance_km, local_time=local_time, state=state)
+
+
+def test_a_nearby_open_station():
+    assert journey.format_nearby((nearby(),), "Diésel") == (
+        '1. <a href="https://www.google.com/maps/search/?api=1&amp;query=39.211417%2C-1.539167">GALP</a> · 0,4 km\n'
+        "1,499 €/L"
+    )
+
+
+def test_a_far_nearby_station():
+    first_line = journey.format_nearby((nearby(distance_km=12.46),), "Diésel").split("\n")[0]
+
+    assert first_line.endswith("· 12,5 km")
+
+
+@pytest.mark.parametrize("state, alert", [
+    (OpeningState("closed"), "⚠️ <b>Cerrada</b> a las 22:41"),
+    (OpeningState("closing_soon", datetime.datetime(2026, 11, 7, 22, 0, tzinfo=MADRID)),
+     "⚠️ <b>Cierra pronto</b> a las 22:00"),
+    (OpeningState("unknown"), "⚠️ <b>Horario desconocido</b>"),
+])
+def test_a_nearby_alert(state, alert):
+    assert journey.format_nearby((nearby(state=state),), "Diésel").split("\n")[2] == alert
+
+
+def test_a_nearby_name_is_escaped():
+    assert ">A&amp;B &lt;24h&gt;</a>" in journey.format_nearby((nearby(name="A&B <24h>"),), "Diésel")
+
+
+def test_the_nearby_stations_are_numbered_with_an_empty_line_between():
+    text = journey.format_nearby((nearby(name="UNO"), nearby(name="DOS"), nearby(name="TRES")), "Diésel")
+
+    blocks = text.split("\n\n")
+    assert [block.split(". ", 1)[0] for block in blocks] == ["1", "2", "3"]
+    assert ">DOS</a>" in blocks[1]
+
+
+def test_no_nearby_station():
+    assert journey.format_nearby((), "Diésel") == "Ninguna gasolinera vende Diésel a menos de 50 km de tu ubicación."

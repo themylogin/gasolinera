@@ -368,3 +368,31 @@ def test_the_opening_state_uses_the_local_arrival(store, no_correction):
 def test_the_link_of_a_station():
     assert refuel.station_link(39.211417, -1.539167) == (
         "https://www.google.com/maps/search/?api=1&query=39.211417%2C-1.539167")
+
+
+def test_nearby_keeps_the_10_nearest_nearest_first(store):
+    for station_id in range(1, 13):
+        insert_station(store, station_id, 40.42 + station_id / 1000, -3.70, {"Precio Gasoleo A": "1,8"})
+
+    found = asyncio.run(refuel.nearby(ORIGIN, "diesel", NOW))
+
+    assert [entry.station.id for entry in found] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    assert found[0].price == Decimal("1.8")
+    assert found[0].distance_km == pytest.approx(0.111, abs=0.001)
+
+
+def test_nearby_takes_the_lower_id_on_a_tie(store):
+    insert_station(store, 2, 40.421, -3.70, {"Precio Gasoleo A": "1,8"})
+    insert_station(store, 1, 40.421, -3.70, {"Precio Gasoleo A": "1,9"})
+
+    assert [entry.station.id for entry in asyncio.run(refuel.nearby(ORIGIN, "diesel", NOW))] == [1, 2]
+
+
+def test_nearby_gives_the_state_now_in_the_zone_of_the_station(store):
+    insert_station(store, 1, 40.42, -3.70, {"Precio Gasoleo A": "1,8"}, hours="L-D: 07:00-22:00")
+    now = datetime.datetime(2026, 11, 7, 21, 41, tzinfo=datetime.timezone.utc)
+
+    [entry] = asyncio.run(refuel.nearby(ORIGIN, "diesel", now))
+
+    assert entry.state == OpeningState("closed")
+    assert entry.local_time.strftime("%H:%M") == "22:41"

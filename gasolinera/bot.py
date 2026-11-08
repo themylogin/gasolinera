@@ -12,7 +12,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from . import car, refuel
 from .config import config
-from .journey import GAUGES, INFO, format_answer, gauge_mark, parse_location, parse_range
+from .journey import GAUGES, INFO, format_answer, format_nearby, gauge_mark, parse_location, parse_range
 from .osrm import NoRoute, Router, RouterUnavailable
 
 __all__ = ["ChatState", "Journey", "build", "main", "post_init"]
@@ -33,6 +33,7 @@ class Journey:
     toll_token: str | None = None
     toll_minutes: int | None = None
     avoid_tolls: bool = False
+    nearby_token: str | None = None
 
 
 class ChatState:
@@ -49,6 +50,9 @@ class ChatState:
 
     def new_toll_token(self):
         return f"t{next(self._tokens)}"
+
+    def new_nearby_token(self):
+        return f"n{next(self._tokens)}"
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,8 +117,12 @@ async def handle_location(message, state, router, toll_free_router, location):
         await message.reply_text("Primero dime cómo es tu coche con /coche.")
         return
 
-    state.journeys[user_id] = Journey(origin=location)
-    await message.reply_text("Ahora envíame el destino.")
+    token = state.new_nearby_token()
+    state.journeys[user_id] = Journey(origin=location, nearby_token=token)
+    markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton("o mostrar gasolineras cercanas", callback_data=f"nearby:{token}"),
+    ]])
+    await message.reply_text("Ahora envíame el destino.", reply_markup=markup)
 
 
 async def choose_route(message, state, user_id, journey, gauge_steps, router, toll_free_router):
@@ -228,6 +236,36 @@ async def toll_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         label = f"Peajes: Sí (-{journey.toll_minutes} min)"
     await query.edit_message_text(label)
     await ask_fuel(query.message, state, user_id, journey, parameters.gauge_steps)
+
+
+async def nearby_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    state = context.bot_data[STATE_KEY]
+    user_id = query.from_user.id
+    token = query.data.removeprefix("nearby:")
+    journey = state.journeys.get(user_id)
+    parameters = await car.load_car(user_id)
+    if journey is None or journey.destination is not None or journey.nearby_token != token or parameters is None:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text("Esta pregunta ha caducado.")
+        return
+
+    # A second press on the same button must not send a second list.
+    state.journeys.pop(user_id, None)
+    await query.edit_message_reply_markup(reply_markup=None)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        stations = await refuel.nearby(journey.origin, parameters.fuel_type, now)
+    except Exception as error:
+        logger.warning("Error listing the stations near %r: %r", journey.origin, error, exc_info=True)
+        await query.message.reply_text("No he podido buscar las gasolineras. Lo siento mucho 😞")
+        return
+
+    await query.message.reply_text(format_nearby(stations, car.FUEL_LABELS[parameters.fuel_type]),
+                                   parse_mode=ParseMode.HTML,
+                                   link_preview_options=LinkPreviewOptions(is_disabled=True))
 
 
 def search_router(context, journey):
@@ -356,6 +394,7 @@ def build(token, *, request=None, get_updates_request=None, router=None):
     application.add_handler(CallbackQueryHandler(car_button_handler, pattern=r"^car:"))
     application.add_handler(CallbackQueryHandler(gauge_button_handler, pattern=r"^gauge:"))
     application.add_handler(CallbackQueryHandler(toll_button_handler, pattern=r"^tolls:"))
+    application.add_handler(CallbackQueryHandler(nearby_button_handler, pattern=r"^nearby:"))
 
     return application
 

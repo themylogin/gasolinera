@@ -6,7 +6,7 @@ import re
 
 from .refuel import NoStop, station_link
 
-__all__ = ["GAUGES", "INFO", "format_answer", "gauge_mark", "parse_location", "parse_range"]
+__all__ = ["GAUGES", "INFO", "format_answer", "format_nearby", "gauge_mark", "parse_location", "parse_range"]
 
 INFO = """Este bot busca dónde repostar más barato en tu ruta por España.
 
@@ -98,20 +98,44 @@ def format_answer(answer, fuel_label):
                        for number, listed in enumerate(answer.stations, start=1))
 
 
-def _station_lines(number, listed):
-    station = listed.station
-    link = html.escape(station_link(station.latitude, station.longitude))
-    name = html.escape(station.name.strip() or "Gasolinera sin nombre")
-    price = f"{listed.price:.3f}".replace(".", ",")
-    lines = [
-        f'{number}. <a href="{link}">{name}</a> · {round(listed.distance_m / 1000)} km',
-        f"{price} €/L · {_minutes(listed.detour_s)}",
-    ]
+def format_nearby(stations, fuel_label):
+    if not stations:
+        return f"Ninguna gasolinera vende {fuel_label} a menos de 50 km de tu ubicación."
 
-    alert = _alert(listed)
+    return "\n\n".join("\n".join(_nearby_lines(number, nearby))
+                       for number, nearby in enumerate(stations, start=1))
+
+
+def _nearby_lines(number, nearby):
+    distance = f"{nearby.distance_km:.1f}".replace(".", ",")
+    lines = [f"{_station_title(number, nearby.station)} · {distance} km", _price_text(nearby.price)]
+
+    alert = _alert(nearby.state, nearby.local_time)
     if alert is not None:
         lines.append(alert)
     return lines
+
+
+def _station_lines(number, listed):
+    lines = [
+        f"{_station_title(number, listed.station)} · {round(listed.distance_m / 1000)} km",
+        f"{_price_text(listed.price)} · {_minutes(listed.detour_s)}",
+    ]
+
+    alert = _alert(listed.state, listed.arrival)
+    if alert is not None:
+        lines.append(alert)
+    return lines
+
+
+def _station_title(number, station):
+    link = html.escape(station_link(station.latitude, station.longitude))
+    name = html.escape(station.name.strip() or "Gasolinera sin nombre")
+    return f'{number}. <a href="{link}">{name}</a>'
+
+
+def _price_text(price):
+    return f"{price:.3f} €/L".replace(".", ",")
 
 
 def _minutes(seconds):
@@ -121,10 +145,9 @@ def _minutes(seconds):
     return f"{minutes} min"
 
 
-def _alert(listed):
-    state = listed.state
+def _alert(state, closed_at):
     if state.kind == "closed":
-        return f"⚠️ <b>Cerrada</b> a las {listed.arrival.strftime('%H:%M')}"
+        return f"⚠️ <b>Cerrada</b> a las {closed_at.strftime('%H:%M')}"
     if state.kind == "closing_soon":
         return f"⚠️ <b>Cierra pronto</b> a las {state.closes_at.strftime('%H:%M')}"
     if state.kind == "unknown":

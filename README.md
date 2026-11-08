@@ -66,7 +66,10 @@ In Telegram:
    is worth, and the reserve: how many kilometers of range you want left when
    you refuel.
 2. Send your location, then the destination. A location is a shared
-   location or `lat, lon` text.
+   location or `lat, lon` text. Instead of the destination, you can press
+   `o mostrar gasolineras cercanas`. The bot then lists the 10 stations
+   nearest to your location that sell your fuel, by straight-line distance,
+   and the journey ends.
 3. When the route without tolls differs from the fastest route, the bot asks
    `¿Quieres usar autopistas de peaje?`. Press `Sí (-44 min)` or
    `No`. The number is the time that the tolls save. Both routes come
