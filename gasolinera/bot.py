@@ -3,6 +3,7 @@ from dataclasses import dataclass, replace
 import datetime
 import itertools
 import logging
+from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
 from telegram.constants import ParseMode
@@ -10,7 +11,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from . import car, refuel
 from .config import config
-from .journey import GAUGE, INFO, format_answer, gauge_mark, parse_location, parse_range
+from .journey import GAUGES, INFO, format_answer, gauge_mark, parse_location, parse_range
 from .osrm import NoRoute, Router, RouterUnavailable
 
 __all__ = ["ChatState", "Journey", "build", "main", "post_init"]
@@ -88,7 +89,13 @@ async def handle_location(message, state, router, location):
 
     journey = state.journeys.get(user_id)
     if journey is not None and journey.destination is None:
-        await ask_fuel(message, state, user_id, Journey(origin=journey.origin, destination=location))
+        parameters = await car.load_car(user_id)
+        if parameters is None:
+            state.journeys.pop(user_id, None)
+            await message.reply_text("Primero dime cómo es tu coche con /coche.")
+            return
+        await ask_fuel(message, state, user_id, Journey(origin=journey.origin, destination=location),
+                       parameters.gauge_steps)
         return
 
     if await car.load_car(user_id) is None:
@@ -100,12 +107,12 @@ async def handle_location(message, state, router, location):
     await message.reply_text("Ahora envíame el destino.")
 
 
-async def ask_fuel(message, state, user_id, journey):
+async def ask_fuel(message, state, user_id, journey, gauge_steps):
     token = state.new_gauge_token()
     state.journeys[user_id] = replace(journey, gauge_token=token)
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton(label, callback_data=f"gauge:{token}:{sixteenths}") for label, sixteenths in row]
-        for row in GAUGE
+        [InlineKeyboardButton(label, callback_data=f"gauge:{token}:{step}") for label, step in row]
+        for row in GAUGES[gauge_steps]
     ])
     await message.reply_text("¿Cuánto combustible te queda? Elige en el indicador o escribe los kilómetros de "
                              "autonomía.", reply_markup=markup)
@@ -134,11 +141,11 @@ async def gauge_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     state = context.bot_data[STATE_KEY]
     router = context.bot_data[ROUTER_KEY]
     user_id = query.from_user.id
-    token, _, sixteenths = query.data.removeprefix("gauge:").partition(":")
+    token, _, step = query.data.removeprefix("gauge:").partition(":")
     journey = state.journeys.get(user_id)
     parameters = await car.load_car(user_id)
-    if (journey is None or journey.destination is None or journey.gauge_token != token
-            or sixteenths not in {str(value) for row in GAUGE for _label, value in row} or parameters is None):
+    if (journey is None or journey.destination is None or journey.gauge_token != token or parameters is None
+            or step not in {str(value) for row in GAUGES[parameters.gauge_steps] for _label, value in row}):
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text("Esta pregunta ha caducado.")
         return
@@ -146,9 +153,10 @@ async def gauge_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     # A second press on the same keyboard must not start a second search.
     journey = replace(journey, gauge_token=None)
     state.journeys[user_id] = journey
-    liters = parameters.tank_volume * int(sixteenths) / 16
+    steps = parameters.gauge_steps
+    liters = parameters.tank_volume * int(step) / steps
     await query.edit_message_text(
-        f"Combustible: {gauge_mark(int(sixteenths))} ({car.number_text(round(liters, 1))} L)")
+        f"Combustible: {gauge_mark(int(step), steps)} ({car.number_text(round(liters, 1))} L)")
     await run_search(query.message, state, router, user_id, journey, parameters, liters=liters)
 
 
@@ -164,7 +172,7 @@ async def run_search(message, state, router, user_id, journey, parameters, **fue
     except Exception as error:
         logger.warning("Error searching stations for %r: %r", journey, error, exc_info=True)
         await message.reply_text("No he podido calcular la ruta. Lo siento mucho 😞")
-        await ask_fuel(message, state, user_id, journey)
+        await ask_fuel(message, state, user_id, journey, parameters.gauge_steps)
         return
 
     state.journeys.pop(user_id, None)
@@ -190,6 +198,8 @@ async def car_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     reply = car.answer_button(state.car_dialogs.get(user_id), token, choice)
     if reply.pressed_text is None:
         await query.edit_message_reply_markup(reply_markup=None)
+    elif query.message.photo:
+        await query.edit_message_caption(caption=reply.pressed_text)
     else:
         await query.edit_message_text(reply.pressed_text)
 
@@ -217,7 +227,11 @@ async def send_car_reply(message, state, user_id, reply):
             [InlineKeyboardButton(label, callback_data=f"car:{reply.dialog.token}:{choice}") for label, choice in row]
             for row in reply.buttons
         ])
-    await message.reply_text(reply.text, reply_markup=markup)
+    if reply.photo:
+        gauges = Path(__file__).parent / "assets" / "gauges.png"
+        await message.reply_photo(photo=gauges.read_bytes(), caption=reply.text, reply_markup=markup)
+    else:
+        await message.reply_text(reply.text, reply_markup=markup)
 
 
 async def restart_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

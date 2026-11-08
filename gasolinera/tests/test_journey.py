@@ -44,25 +44,58 @@ def test_text_that_is_no_location(text):
     assert journey.parse_location(text) is None
 
 
-def test_the_gauge_rows():
-    assert [[label for label, _value in row] for row in journey.GAUGE] == [
-        ["1/1", ".", ".", ".", "3/4"],
-        ["3/4", ".", ".", ".", "1/2"],
-        ["1/2", ".", ".", ".", "1/4"],
-        ["1/4", ".", ".", "."],
+def labels(steps):
+    return [[label for label, _step in row] for row in journey.GAUGES[steps]]
+
+
+def steps_of(steps):
+    return [[step for _label, step in row] for row in journey.GAUGES[steps]]
+
+
+def test_the_24_step_gauge():
+    assert labels(24) == [
+        ["1", ".", ".", "|", ".", ".", "3/4"],
+        ["3/4", ".", ".", "|", ".", ".", "1/2"],
+        ["1/2", ".", ".", "|", ".", ".", "1/4"],
+        ["1/4", ".", ".", "|", ".", ".", "0"],
     ]
-    assert [[value for _label, value in row] for row in journey.GAUGE] == [
-        [16, 15, 14, 13, 12],
-        [12, 11, 10, 9, 8],
-        [8, 7, 6, 5, 4],
-        [4, 3, 2, 1],
+    assert steps_of(24) == [
+        [24, 23, 22, 21, 20, 19, 18],
+        [18, 17, 16, 15, 14, 13, 12],
+        [12, 11, 10, 9, 8, 7, 6],
+        [6, 5, 4, 3, 2, 1, 0],
     ]
 
 
-@pytest.mark.parametrize("sixteenths, mark", [(16, "1/1"), (12, "3/4"), (8, "1/2"), (4, "1/4"), (13, "13/16"),
-                                              (1, "1/16")])
-def test_gauge_marks(sixteenths, mark):
-    assert journey.gauge_mark(sixteenths) == mark
+def test_the_16_step_gauge():
+    assert labels(16) == [
+        ["1", ".", "|", ",", "3/4"],
+        ["3/4", ".", "|", ",", "1/2"],
+        ["1/2", ".", "|", ",", "1/4"],
+        ["1/4", ".", "|", ",", "0"],
+    ]
+    assert steps_of(16) == [[16, 15, 14, 13, 12], [12, 11, 10, 9, 8], [8, 7, 6, 5, 4], [4, 3, 2, 1, 0]]
+
+
+def test_the_12_step_gauge():
+    assert labels(12) == [
+        ["1", ".", "5/6", ".", "2/3", ".", "1/2"],
+        ["1/2", ".", "1/3", ".", "1/6", ".", "0"],
+    ]
+    assert steps_of(12) == [[12, 11, 10, 9, 8, 7, 6], [6, 5, 4, 3, 2, 1, 0]]
+
+
+@pytest.mark.parametrize("steps", [24, 16, 12])
+def test_a_row_repeats_the_end_of_the_row_before(steps):
+    rows = journey.GAUGES[steps]
+
+    assert all(row[0] == before[-1] for before, row in zip(rows, rows[1:]))
+
+
+@pytest.mark.parametrize("step, steps, mark", [(24, 24, "1"), (0, 24, "0"), (21, 24, "7/8"), (10, 12, "5/6"),
+                                               (13, 16, "13/16"), (12, 16, "3/4")])
+def test_gauge_marks(step, steps, mark):
+    assert journey.gauge_mark(step, steps) == mark
 
 
 @pytest.mark.parametrize("text, range_km", [("120", 120.0), ("87,5", 87.5), ("0", 0.0), ("3000", 3000.0),

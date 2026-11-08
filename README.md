@@ -61,15 +61,17 @@ make bot
 
 In Telegram:
 
-1. `/coche` asks the tank volume, the fuel type, the consumption at 80 km/h
-   and at 120 km/h, what an hour of your time is worth, and the reserve: how
-   many kilometers of range you want left when you refuel.
+1. `/coche` asks the tank volume, the gauge that looks like yours, the fuel
+   type, the consumption at 80 km/h and at 120 km/h, what an hour of your time
+   is worth, and the reserve: how many kilometers of range you want left when
+   you refuel.
 2. Send your location, then the destination. A location is a shared
    location or `lat, lon` text.
-3. Press the fuel gauge mark nearest to your fuel level, or type the range in
+3. Press the mark of your gauge nearest to the needle, or type the range in
    kilometers that your car shows.
 
-With the gauge, the bot plans the stop where the tank holds 5 L. With a typed
+With the gauge, the bot plans the stop where the tank holds 5 L. `0` plans it
+at your location. With a typed
 range, it plans the stop where the range drops to your reserve.
 
 The bot lists the 10 stops with the lowest cost: the fuel for a full tank,
@@ -84,6 +86,16 @@ cannot route to the Canary stations in the store.
 
 OSRM's travel times are multiplied by `TIME_MULTIPLIER`. The default 0.933
 comes from `french_tolls`, which measured it against Google on French roads.
+
+## The gauge picture
+
+`/coche` shows `gasolinera/assets/gauges.png`: the three gauges of `gauge/` at
+one size, labeled with the steps of their keyboards. After a change in
+`gauge/`, render it again and commit it:
+
+```
+make gauge-image
+```
 
 ## Gas stations
 

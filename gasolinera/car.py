@@ -5,12 +5,12 @@ import re
 from sqlalchemy.dialects.sqlite import insert
 
 from . import db
+from .journey import GAUGES
 from .models import Car
 
 __all__ = ["FUEL_LABELS", "CarDialog", "CarParameters", "CarReply", "answer_button", "answer_text", "describe",
            "load_car", "number_text", "parse_consumption", "parse_eur_per_hour", "parse_reserve_km", "parse_tank_volume",
-           "save_car",
-           "start"]
+           "save_car", "start"]
 
 FUEL_LABELS = {
     "gasoline_95": "Gasolina 95",
@@ -27,6 +27,7 @@ class CarParameters:
     consume_120: float
     eur_per_hour: float
     reserve_km: float
+    gauge_steps: int
 
 
 @dataclasses.dataclass(frozen=True)
@@ -34,6 +35,7 @@ class CarDialog:
     token: str
     step: str
     tank_volume: int | None = None
+    gauge_steps: int | None = None
     fuel_type: str | None = None
     consume_80: float | None = None
     consume_120: float | None = None
@@ -47,6 +49,8 @@ class CarReply:
     buttons: tuple = ()
     save: CarParameters | None = None
     pressed_text: str | None = None
+    # The reply is the gauge picture, with the text as its caption.
+    photo: bool = False
 
 
 def start(token, parameters):
@@ -66,8 +70,11 @@ def answer_text(dialog, text):
         if volume is None:
             return CarReply(text="El volumen del depósito debe ser un número entero de 30 o más. Escríbelo de nuevo.",
                             dialog=dialog)
-        return _ask_fuel_type("Elige el tipo de combustible.",
-                              dataclasses.replace(dialog, step="fuel_type", tank_volume=volume))
+        return _ask_gauge("¿Cuántas secciones tiene tu indicador de combustible?",
+                          dataclasses.replace(dialog, step="gauge", tank_volume=volume))
+
+    if dialog.step == "gauge":
+        return _ask_gauge("Elige tu indicador con un botón.", dialog)
 
     if dialog.step == "fuel_type":
         return _ask_fuel_type("Elige el tipo de combustible con un botón.", dialog)
@@ -88,7 +95,8 @@ def answer_text(dialog, text):
                             dialog=dialog)
         parameters = CarParameters(tank_volume=dialog.tank_volume, fuel_type=dialog.fuel_type,
                                    consume_80=dialog.consume_80, consume_120=dialog.consume_120,
-                                   eur_per_hour=dialog.eur_per_hour, reserve_km=reserve_km)
+                                   eur_per_hour=dialog.eur_per_hour, reserve_km=reserve_km,
+                                   gauge_steps=dialog.gauge_steps)
         return CarReply(text=f"Tu coche está guardado.\n\n{describe(parameters)}", dialog=None, save=parameters)
 
     consumption = parse_consumption(text)
@@ -113,6 +121,11 @@ def answer_button(dialog, token, choice):
     if dialog is None or dialog.token != token:
         return _expired(dialog)
 
+    if dialog.step == "gauge" and choice in {str(steps) for steps in GAUGES}:
+        reply = _ask_fuel_type("Elige el tipo de combustible.",
+                               dataclasses.replace(dialog, step="fuel_type", gauge_steps=int(choice)))
+        return dataclasses.replace(reply, pressed_text=f"Indicador: {choice} secciones")
+
     if dialog.step == "fuel_type" and choice in FUEL_LABELS:
         reply = _ask_consumption(80, dataclasses.replace(dialog, step="consume_80", fuel_type=choice))
         return dataclasses.replace(reply, pressed_text=f"Combustible: {FUEL_LABELS[choice]}")
@@ -136,6 +149,11 @@ def _ask_whether_to_change(text, dialog):
 
 def _ask_tank_volume(dialog):
     return CarReply(text="Escribe el volumen del depósito en litros.", dialog=dialog)
+
+
+def _ask_gauge(text, dialog):
+    return CarReply(text=text, dialog=dialog, buttons=(tuple((str(steps), str(steps)) for steps in GAUGES),),
+                    photo=True)
 
 
 def _ask_fuel_type(text, dialog):
@@ -194,6 +212,7 @@ def parse_reserve_km(text):
 def describe(parameters):
     return "\n".join([
         f"Depósito: {parameters.tank_volume} L",
+        f"Indicador: {parameters.gauge_steps} secciones",
         f"Combustible: {FUEL_LABELS[parameters.fuel_type]}",
         f"A 80 km/h: {number_text(parameters.consume_80)} L/100 km",
         f"A 120 km/h: {number_text(parameters.consume_120)} L/100 km",
@@ -211,11 +230,12 @@ async def load_car(telegram_user_id):
     async with db.Session() as session:
         row = await session.get(Car, telegram_user_id)
 
-    if row is None or row.fuel_type not in FUEL_LABELS:
+    if row is None or row.fuel_type not in FUEL_LABELS or row.gauge_steps not in GAUGES:
         return None
 
     return CarParameters(tank_volume=row.tank_volume, fuel_type=row.fuel_type, consume_80=row.consume_80,
-                         consume_120=row.consume_120, eur_per_hour=row.eur_per_hour, reserve_km=row.reserve_km)
+                         consume_120=row.consume_120, eur_per_hour=row.eur_per_hour, reserve_km=row.reserve_km,
+                         gauge_steps=row.gauge_steps)
 
 
 async def save_car(telegram_user_id, parameters):

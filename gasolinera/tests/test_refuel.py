@@ -17,7 +17,7 @@ ORIGIN = (-3.70, 40.42)
 DESTINATION = (2.17, 41.39)
 NOW = datetime.datetime(2026, 11, 7, 18, 0, tzinfo=datetime.timezone.utc)
 DIESEL = CarParameters(tank_volume=50, fuel_type="diesel", consume_80=6.0, consume_120=8.0, eur_per_hour=20.0,
-                       reserve_km=50.0)
+                       reserve_km=50.0, gauge_steps=16)
 
 
 @pytest.fixture

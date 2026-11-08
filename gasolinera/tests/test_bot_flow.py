@@ -27,7 +27,7 @@ ASK_GAUGE = "¿Cuánto combustible te queda? Elige en el indicador o escribe los
 EXPIRED_GAUGE = "Esta pregunta ha caducado."
 EXPIRED = "Esta pregunta ha caducado. Envía /coche para empezar de nuevo."
 SAVED_DIESEL = ("Tu coche está guardado.\n\n"
-                "Depósito: 50 L\nCombustible: Diésel\nA 80 km/h: 5,8 L/100 km\nA 120 km/h: 7 L/100 km\n"
+                "Depósito: 50 L\nIndicador: 16 secciones\nCombustible: Diésel\nA 80 km/h: 5,8 L/100 km\nA 120 km/h: 7 L/100 km\n"
                 "Tu tiempo: 20 €/h\nReserva: 50 km")
 
 
@@ -81,9 +81,10 @@ def talk(osrm, scenario):
     return asyncio.run(run())
 
 
-def store_car(db_path, tank_volume=50, fuel_type="diesel"):
+def store_car(db_path, tank_volume=50, fuel_type="diesel", gauge_steps=16):
     with sqlite3.connect(db_path) as connection:
-        connection.execute("INSERT INTO car VALUES (?, ?, ?, 5.8, 7.0, 20.0, 50.0)", (USER_ID, tank_volume, fuel_type))
+        connection.execute("INSERT INTO car VALUES (?, ?, ?, 5.8, 7.0, 20.0, 50.0, ?)",
+                           (USER_ID, tank_volume, fuel_type, gauge_steps))
 
 
 def stored_cars(db_path):
@@ -103,6 +104,7 @@ def store_station(db_path, hours="L-D: 24H"):
 async def enter_car(chat):
     await chat.send_command("coche")
     await chat.send_text("50")
+    await chat.press_labelled("16")
     await chat.press_labelled("Diésel")
     await chat.send_text("5,8")
     await chat.send_text("7")
@@ -116,14 +118,16 @@ async def enter_car(chat):
 def test_a_new_car(store, osrm):
     chat = talk(osrm, enter_car)
 
-    assert chat.texts() == [ASK_TANK, "Combustible: Diésel", ASK_80, ASK_120, ASK_TIME, ASK_RESERVE, SAVED_DIESEL]
-    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0)]
+    assert chat.texts() == [ASK_TANK, "Indicador: 16 secciones", "Combustible: Diésel", ASK_80, ASK_120, ASK_TIME, ASK_RESERVE,
+                            SAVED_DIESEL]
+    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0, 16)]
 
 
 def test_the_fuel_question_has_three_buttons(store, osrm):
     async def scenario(chat):
         await chat.send_command("coche")
         await chat.send_text("50")
+        await chat.press_labelled("16")
 
     chat = talk(osrm, scenario)
 
@@ -137,6 +141,7 @@ def test_text_instead_of_a_fuel_button(store, osrm):
     async def scenario(chat):
         await chat.send_command("coche")
         await chat.send_text("50")
+        await chat.press_labelled("16")
         await chat.send_text("diesel")
 
     assert talk(osrm, scenario).texts()[-1] == "Elige el tipo de combustible con un botón."
@@ -146,6 +151,7 @@ def test_coordinates_during_the_consumption_question(store, osrm):
     async def scenario(chat):
         await chat.send_command("coche")
         await chat.send_text("50")
+        await chat.press_labelled("16")
         await chat.press_labelled("Diésel")
         await chat.send_text("40.42, -3.70")
 
@@ -163,10 +169,10 @@ def test_a_user_with_a_car_keeps_it(store, osrm):
     chat = talk(osrm, scenario)
 
     assert chat.texts()[0] == ("Tu coche:\n\n"
-                               "Depósito: 50 L\nCombustible: Diésel\nA 80 km/h: 5,8 L/100 km\nA 120 km/h: 7 L/100 km\n"
+                               "Depósito: 50 L\nIndicador: 16 secciones\nCombustible: Diésel\nA 80 km/h: 5,8 L/100 km\nA 120 km/h: 7 L/100 km\n"
                                "Tu tiempo: 20 €/h\nReserva: 50 km\n\n¿Quieres cambiarlo?")
     assert chat.texts()[-1] == "Tu coche no ha cambiado."
-    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0)]
+    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0, 16)]
 
 
 def test_a_user_with_a_car_changes_it(store, osrm):
@@ -176,6 +182,7 @@ def test_a_user_with_a_car_changes_it(store, osrm):
         await chat.send_command("coche")
         await chat.press_labelled("Sí")
         await chat.send_text("60")
+        await chat.press_labelled("24")
         await chat.press_labelled("Gasolina 95")
         await chat.send_text("6")
         await chat.send_text("8")
@@ -184,7 +191,7 @@ def test_a_user_with_a_car_changes_it(store, osrm):
 
     talk(osrm, scenario)
 
-    assert stored_cars(store) == [(USER_ID, 60, "gasoline_95", 6.0, 8.0, 15.0, 70.0)]
+    assert stored_cars(store) == [(USER_ID, 60, "gasoline_95", 6.0, 8.0, 15.0, 70.0, 24)]
 
 
 def test_a_dialog_that_stops_changes_no_car(store, osrm):
@@ -194,18 +201,20 @@ def test_a_dialog_that_stops_changes_no_car(store, osrm):
         await chat.send_command("coche")
         await chat.press_labelled("Sí")
         await chat.send_text("50")
+        await chat.press_labelled("16")
         await chat.press_labelled("Gasolina 98")
         await chat.send_command("reiniciar")
 
     talk(osrm, scenario)
 
-    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0)]
+    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0, 16)]
 
 
 def test_coche_twice_starts_again(store, osrm):
     async def scenario(chat):
         await chat.send_command("coche")
         await chat.send_text("50")
+        await chat.press_labelled("24")
         await chat.press_labelled("Gasolina 95")
         await chat.send_command("coche")
 
@@ -218,14 +227,55 @@ def test_an_old_button_changes_nothing(store, osrm):
         await chat.send_text("50")
         await chat.send_command("coche")
         await chat.send_text("50")
-        await chat.press_labelled("Gasolina 98", nth_from_end=1)
+        await chat.press_labelled("12", nth_from_end=1)
         await chat.send_text("6")
 
     chat = talk(osrm, scenario)
 
     assert chat.texts()[-2] == EXPIRED
-    assert chat.texts()[-1] == "Elige el tipo de combustible con un botón."
+    assert chat.texts()[-1] == "Elige tu indicador con un botón."
     assert any(sent.method == "editMessageReplyMarkup" for sent in chat.sent)
+
+
+def test_the_gauge_question_is_a_photo(store, osrm):
+    async def scenario(chat):
+        await chat.send_command("coche")
+        await chat.send_text("50")
+
+    chat = talk(osrm, scenario)
+
+    question = chat.sent[-1]
+    assert question.method == "sendPhoto"
+    assert question.text == "¿Cuántas secciones tiene tu indicador de combustible?"
+    assert [[button["text"] for button in row] for row in question.markup["inline_keyboard"]] == [["24", "16", "12"]]
+
+
+def test_a_gauge_press_changes_the_caption(store, osrm):
+    async def scenario(chat):
+        await chat.send_command("coche")
+        await chat.send_text("50")
+        await chat.press_labelled("24")
+
+    chat = talk(osrm, scenario)
+
+    [edit] = [sent for sent in chat.sent if sent.method == "editMessageCaption"]
+    assert edit.text == "Indicador: 24 secciones"
+    assert edit.markup is None
+    assert chat.texts()[-1] == "Elige el tipo de combustible."
+
+
+def test_text_instead_of_a_gauge_button(store, osrm):
+    async def scenario(chat):
+        await chat.send_command("coche")
+        await chat.send_text("50")
+        await chat.send_text("24")
+
+    chat = talk(osrm, scenario)
+
+    again = chat.sent[-1]
+    assert again.method == "sendPhoto"
+    assert again.text == "Elige tu indicador con un botón."
+    assert [[button["text"] for button in row] for row in again.markup["inline_keyboard"]] == [["24", "16", "12"]]
 
 
 def test_a_failed_save(store, osrm, monkeypatch):
@@ -303,19 +353,55 @@ def test_the_answer_lists_the_stations(store, osrm):
     assert answer.parameters["link_preview_options"] == {"is_disabled": True}
 
 
-def test_the_gauge_keyboard(store, osrm):
-    store_car(store)
+@pytest.mark.parametrize("gauge_steps, rows", [
+    (24, [["1", ".", ".", "|", ".", ".", "3/4"], ["3/4", ".", ".", "|", ".", ".", "1/2"],
+          ["1/2", ".", ".", "|", ".", ".", "1/4"], ["1/4", ".", ".", "|", ".", ".", "0"]]),
+    (16, [["1", ".", "|", ",", "3/4"], ["3/4", ".", "|", ",", "1/2"], ["1/2", ".", "|", ",", "1/4"],
+          ["1/4", ".", "|", ",", "0"]]),
+    (12, [["1", ".", "5/6", ".", "2/3", ".", "1/2"], ["1/2", ".", "1/3", ".", "1/6", ".", "0"]]),
+])
+def test_the_gauge_keyboard_of_the_car(store, osrm, gauge_steps, rows):
+    store_car(store, gauge_steps=gauge_steps)
 
     chat = talk(osrm, ask_fuel)
 
     [gauge] = gauges(chat)
     assert gauge.text == ASK_GAUGE
-    assert [[button["text"] for button in row] for row in gauge.markup["inline_keyboard"]] == [
-        ["1/1", ".", ".", ".", "3/4"],
-        ["3/4", ".", ".", ".", "1/2"],
-        ["1/2", ".", ".", ".", "1/4"],
-        ["1/4", ".", ".", "."],
-    ]
+    assert [[button["text"] for button in row] for row in gauge.markup["inline_keyboard"]] == rows
+
+
+def test_a_mark_between_two_labels_on_the_24_step_gauge(store, osrm):
+    store_car(store, gauge_steps=24)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await press_gauge(chat, 21)
+
+    assert talk(osrm, scenario).texts()[1] == "Combustible: 7/8 (43,8 L)"
+
+
+def test_a_full_tank_on_the_12_step_gauge(store, osrm):
+    store_car(store, gauge_steps=12)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("1")
+
+    assert talk(osrm, scenario).texts()[1] == "Combustible: 1 (50 L)"
+
+
+def test_0_searches_near_the_origin(store, osrm):
+    store_car(store)
+    store_station(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("0")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[1] == "Combustible: 0 (0 L)"
+    assert chat.sent[-1].text.startswith("1. <a ")
 
 
 @pytest.mark.parametrize("nth_from_end", [0, 1])
@@ -417,7 +503,7 @@ def test_a_gauge_from_an_earlier_journey(store, osrm):
 
     async def scenario(chat):
         await ask_fuel(chat)
-        await chat.press_labelled("1/1")
+        await chat.press_labelled("1")
         await ask_fuel(chat)
         await press_gauge(chat, 8, gauge=0)
         await press_gauge(chat, 8, gauge=-1)
@@ -492,7 +578,7 @@ def test_reiniciar_resets_the_journey_but_not_the_car(store, osrm):
     chat = talk(osrm, scenario)
 
     assert chat.texts() == [ASK_DESTINATION, "Envíame tu ubicación actual.", ASK_DESTINATION]
-    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0)]
+    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0, 16)]
 
 
 @pytest.mark.parametrize("send", [

@@ -20,7 +20,7 @@ MIN_FREE_GB := 10
 HOST_USER := $(shell id -u):$(shell id -g)
 
 .PHONY: all download_pbf setup_osrm guard-osrm-path osrm clean-osrm \
-        requirements test bot down gas-stations
+        requirements test bot down gas-stations gauge-image
 
 all: guard-osrm-path download_pbf setup_osrm
 
@@ -115,3 +115,9 @@ down:
 
 gas-stations:
 	$(COMPOSE) --profile gas-stations run --rm --no-TTY --build gas-stations
+
+# Pillow runs in a throwaway container, so the app image needs no image library.
+gauge-image:
+	$(DOCKER) run --rm --user $(HOST_USER) -e UV_CACHE_DIR=/tmp/uv -v "$$(pwd):/work" -w /work \
+	    ghcr.io/astral-sh/uv:python3.11-bookworm-slim \
+	    uv run --no-project --with pillow python gauge/render.py

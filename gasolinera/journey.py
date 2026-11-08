@@ -1,11 +1,12 @@
 # -*- coding=utf-8 -*-
+from fractions import Fraction
 import html
 import math
 import re
 
 from .refuel import NoStop, station_link
 
-__all__ = ["GAUGE", "INFO", "format_answer", "gauge_mark", "parse_location", "parse_range"]
+__all__ = ["GAUGES", "INFO", "format_answer", "gauge_mark", "parse_location", "parse_range"]
 
 INFO = """Este bot busca dónde repostar más barato en tu ruta por España.
 
@@ -40,22 +41,35 @@ def parse_location(text):
     return longitude, latitude
 
 
-# Sixteenths of the tank, as a fuel gauge reads. Each row is a quarter and
-# shows both of its ends, so a quarter mark appears twice with one value.
-GAUGE = (
-    (("1/1", 16), (".", 15), (".", 14), (".", 13), ("3/4", 12)),
-    (("3/4", 12), (".", 11), (".", 10), (".", 9), ("1/2", 8)),
-    (("1/2", 8), (".", 7), (".", 6), (".", 5), ("1/4", 4)),
-    (("1/4", 4), (".", 3), (".", 2), (".", 1)),
-)
+# The keyboards of the three gauges, by their steps. Each button is
+# `(label, step)`, from full to empty. A row repeats the label that ends the
+# row before it, with the same step.
+GAUGES = {
+    24: (
+        (("1", 24), (".", 23), (".", 22), ("|", 21), (".", 20), (".", 19), ("3/4", 18)),
+        (("3/4", 18), (".", 17), (".", 16), ("|", 15), (".", 14), (".", 13), ("1/2", 12)),
+        (("1/2", 12), (".", 11), (".", 10), ("|", 9), (".", 8), (".", 7), ("1/4", 6)),
+        (("1/4", 6), (".", 5), (".", 4), ("|", 3), (".", 2), (".", 1), ("0", 0)),
+    ),
+    16: (
+        (("1", 16), (".", 15), ("|", 14), (",", 13), ("3/4", 12)),
+        (("3/4", 12), (".", 11), ("|", 10), (",", 9), ("1/2", 8)),
+        (("1/2", 8), (".", 7), ("|", 6), (",", 5), ("1/4", 4)),
+        (("1/4", 4), (".", 3), ("|", 2), (",", 1), ("0", 0)),
+    ),
+    12: (
+        (("1", 12), (".", 11), ("5/6", 10), (".", 9), ("2/3", 8), (".", 7), ("1/2", 6)),
+        (("1/2", 6), (".", 5), ("1/3", 4), (".", 3), ("1/6", 2), (".", 1), ("0", 0)),
+    ),
+}
 
 
-def gauge_mark(sixteenths):
-    for row in GAUGE:
+def gauge_mark(step, steps):
+    for row in GAUGES[steps]:
         for label, value in row:
-            if value == sixteenths and label != ".":
+            if value == step and label not in (".", ",", "|"):
                 return label
-    return f"{sixteenths}/16"
+    return str(Fraction(step, steps))
 
 
 def parse_range(text):

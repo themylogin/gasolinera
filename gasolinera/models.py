@@ -50,6 +50,7 @@ class Car(Base):
 
     telegram_user_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
     tank_volume: Mapped[int] = mapped_column(Integer, nullable=False)
+    gauge_steps: Mapped[int] = mapped_column(Integer, nullable=False, server_default="16")
     fuel_type: Mapped[str] = mapped_column(Text, nullable=False)
     consume_80: Mapped[float] = mapped_column(Float, nullable=False)
     consume_120: Mapped[float] = mapped_column(Float, nullable=False)

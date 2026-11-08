@@ -42,7 +42,7 @@ def test_fresh_store_has_the_station_table_at_the_latest_revision():
             "gas_station_area_parent",
             "car",
         ],
-        ["d449d7fdb4d1"],
+        ["df0c73903ae5"],
     )
 
 

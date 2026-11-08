@@ -24,7 +24,9 @@ ANSWERED = (
     "getMe",
     "setMyCommands",
     "sendMessage",
+    "sendPhoto",
     "editMessageText",
+    "editMessageCaption",
     "editMessageReplyMarkup",
     "answerCallbackQuery",
 )
@@ -38,7 +40,12 @@ class Sent:
 
     @property
     def text(self):
-        return self.parameters.get("text") or ""
+        """The text of a message, or the caption of a photo."""
+        return self.parameters.get("text") or self.parameters.get("caption") or ""
+
+    @property
+    def photo(self):
+        return self.method in ("sendPhoto", "editMessageCaption")
 
     @property
     def markup(self):
@@ -64,7 +71,7 @@ class Telegram(BaseRequest):
         """One entry per message, with its final text: an edit replaces what was sent."""
         order, final = [], {}
         for sent in self.sent:
-            if sent.method not in ("sendMessage", "editMessageText"):
+            if sent.method not in ("sendMessage", "sendPhoto", "editMessageText", "editMessageCaption"):
                 continue
             if sent.message_id not in final:
                 order.append(sent.message_id)
@@ -96,8 +103,12 @@ class Telegram(BaseRequest):
             "date": 0,
             "chat": {"id": parameters.get("chat_id", CHAT_ID), "type": "private"},
             "from": {"id": 424242, "is_bot": True, "first_name": "Gasolinera"},
-            "text": parameters.get("text", ""),
         }
+        if endpoint in ("sendPhoto", "editMessageCaption"):
+            result["photo"] = [{"file_id": "gauges", "file_unique_id": "gauges", "width": 1200, "height": 510}]
+            result["caption"] = parameters.get("caption", "")
+        else:
+            result["text"] = parameters.get("text", "")
         if parameters.get("reply_markup"):
             result["reply_markup"] = parameters["reply_markup"]
         return result
@@ -141,15 +152,25 @@ class Chat:
                 "from": {"id": USER_ID, "is_bot": False, "first_name": "Conductor"},
                 "chat_instance": "1",
                 "data": data,
-                "message": {
-                    "message_id": message_id,
-                    "date": 0,
-                    "chat": {"id": CHAT_ID, "type": "private"},
-                    "from": {"id": 424242, "is_bot": True, "first_name": "Gasolinera"},
-                    "text": "the message the button was on",
-                },
+                "message": self._pressed_message(message_id),
             },
         })
+
+    def _pressed_message(self, message_id):
+        """The message as the bot sent it: a press on a photo must arrive on a photo."""
+        message = {
+            "message_id": message_id,
+            "date": 0,
+            "chat": {"id": CHAT_ID, "type": "private"},
+            "from": {"id": 424242, "is_bot": True, "first_name": "Gasolinera"},
+            "text": "the message the button was on",
+        }
+        sent = [s for s in self.telegram.sent if s.message_id == message_id and s.method == "sendPhoto"]
+        if sent:
+            del message["text"]
+            message["photo"] = [{"file_id": "gauges", "file_unique_id": "gauges", "width": 1200, "height": 510}]
+            message["caption"] = sent[0].text
+        return message
 
     async def press_labelled(self, label, nth_from_end=0):
         """Press the button with this label on a message, the last one by default."""
