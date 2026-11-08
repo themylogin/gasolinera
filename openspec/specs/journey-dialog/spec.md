@@ -118,7 +118,7 @@ Te mostraré las 10 paradas más baratas, contando el combustible y el tiempo de
 - **WHEN** the bot sends the info text
 - **THEN** its second paragraph lists the four steps, numbered from 1 to 4
 
-### Requirement: The info text lists the commands and the tip links
+### Requirement: The info text lists the commands, the tip links, and the source link
 
 After the use, the info text SHALL have an empty line and these lines:
 
@@ -128,12 +128,18 @@ After the use, the info text SHALL have an empty line and these lines:
 /info: esta información
 
 Puedes decirme gracias aquí: https://buymeacoffee.com/themylogin o https://paypal.me/themyloginspain
+Código abierto: https://github.com/themylogin/gasolinera
 ```
 
 #### Scenario: The tip links
 
 - **WHEN** the bot sends the info text
-- **THEN** its last line holds `https://buymeacoffee.com/themylogin` and `https://paypal.me/themyloginspain`
+- **THEN** its second-to-last line holds `https://buymeacoffee.com/themylogin` and `https://paypal.me/themyloginspain`
+
+#### Scenario: The source link
+
+- **WHEN** the bot sends the info text
+- **THEN** its last line is `Código abierto: https://github.com/themylogin/gasolinera`
 
 ### Requirement: The answer when no stop is needed
 

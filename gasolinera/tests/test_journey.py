@@ -125,7 +125,8 @@ def test_the_info_text():
         "/reiniciar: empezar de nuevo\n"
         "/info: esta información\n"
         "\n"
-        "Puedes decirme gracias aquí: https://buymeacoffee.com/themylogin o https://paypal.me/themyloginspain"
+        "Puedes decirme gracias aquí: https://buymeacoffee.com/themylogin o https://paypal.me/themyloginspain\n"
+        "Código abierto: https://github.com/themylogin/gasolinera"
     )
 
 

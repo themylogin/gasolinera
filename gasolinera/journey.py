@@ -21,7 +21,8 @@ Te mostraré las 10 paradas más baratas, contando el combustible y el tiempo de
 /reiniciar: empezar de nuevo
 /info: esta información
 
-Puedes decirme gracias aquí: https://buymeacoffee.com/themylogin o https://paypal.me/themyloginspain"""
+Puedes decirme gracias aquí: https://buymeacoffee.com/themylogin o https://paypal.me/themyloginspain
+Código abierto: https://github.com/themylogin/gasolinera"""
 
 # `lat, lon` as a user types it, or pastes it out of Google Maps.
 NUMBER = r"(?<![\d.])(-?\d+(?:\.\d+)?)(?![\d.])"
