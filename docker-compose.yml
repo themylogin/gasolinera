@@ -29,7 +29,7 @@ services:
     volumes:
       - "cache:/cache"
     env_file: .env
-    restart: unless-stopped
+    restart: always
     profiles: ["app"]
 
   # Tools
