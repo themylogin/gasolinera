@@ -67,7 +67,11 @@ In Telegram:
    you refuel.
 2. Send your location, then the destination. A location is a shared
    location or `lat, lon` text.
-3. Press the mark of your gauge nearest to the needle, or type the range in
+3. When the route without tolls differs from the fastest route, the bot asks
+   `¿Quieres usar autopistas de peaje?`. Press `Sí (-44 min)` or
+   `No`. The number is the time that the tolls save. Both routes come
+   from `osrm`: the toll-free route adds `exclude=toll` to the request.
+4. Press the mark of your gauge nearest to the needle, or type the range in
    kilometers that your car shows.
 
 With the gauge, the bot plans the stop where the tank holds 5 L. `0` plans it

@@ -1,4 +1,5 @@
 # -*- coding=utf-8 -*-
+import asyncio
 from dataclasses import dataclass, replace
 import datetime
 import itertools
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 STATE_KEY = "gasolinera_chat_state"
 ROUTER_KEY = "gasolinera_router"
+TOLL_FREE_ROUTER_KEY = "gasolinera_toll_free_router"
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,9 @@ class Journey:
     destination: tuple[float, float] | None = None
     # The token of the open fuel question. A gauge button carries it.
     gauge_token: str | None = None
+    toll_token: str | None = None
+    toll_minutes: int | None = None
+    avoid_tolls: bool = False
 
 
 class ChatState:
@@ -42,6 +47,9 @@ class ChatState:
     def new_gauge_token(self):
         return f"g{next(self._tokens)}"
 
+    def new_toll_token(self):
+        return f"t{next(self._tokens)}"
+
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -50,10 +58,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     state = context.bot_data[STATE_KEY]
     router = context.bot_data[ROUTER_KEY]
+    toll_free_router = context.bot_data[TOLL_FREE_ROUTER_KEY]
     user_id = message.from_user.id
 
     if message.location is not None:
-        await handle_location(message, state, router, (message.location.longitude, message.location.latitude))
+        await handle_location(message, state, router, toll_free_router,
+                              (message.location.longitude, message.location.latitude))
         return
 
     text = message.text or ""
@@ -62,19 +72,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     journey = state.journeys.get(user_id)
-    if journey is not None and journey.destination is not None:
-        await handle_range(message, state, router, journey, text)
+    if journey is not None and journey.destination is not None and journey.toll_token is None:
+        await handle_range(message, state, search_router(context, journey), journey, text)
         return
 
     location = parse_location(text)
     if location is not None:
-        await handle_location(message, state, router, location)
+        await handle_location(message, state, router, toll_free_router, location)
         return
 
     await send_info(message)
 
 
-async def handle_location(message, state, router, location):
+async def handle_location(message, state, router, toll_free_router, location):
     user_id = message.from_user.id
     try:
         distance = await router.distance_to_road(location)
@@ -94,8 +104,8 @@ async def handle_location(message, state, router, location):
             state.journeys.pop(user_id, None)
             await message.reply_text("Primero dime cómo es tu coche con /coche.")
             return
-        await ask_fuel(message, state, user_id, Journey(origin=journey.origin, destination=location),
-                       parameters.gauge_steps)
+        await choose_route(message, state, user_id, Journey(origin=journey.origin, destination=location),
+                           parameters.gauge_steps, router, toll_free_router)
         return
 
     if await car.load_car(user_id) is None:
@@ -105,6 +115,42 @@ async def handle_location(message, state, router, location):
 
     state.journeys[user_id] = Journey(origin=location)
     await message.reply_text("Ahora envíame el destino.")
+
+
+async def choose_route(message, state, user_id, journey, gauge_steps, router, toll_free_router):
+    points = [journey.origin, journey.destination]
+    with_tolls, toll_free = await asyncio.gather(router.route(points, segments=True),
+                                                 toll_free_router.route(points, segments=True),
+                                                 return_exceptions=True)
+    if isinstance(with_tolls, NoRoute):
+        state.journeys.pop(user_id, None)
+        await message.reply_text("No encuentro una ruta por carretera entre el origen y el destino. "
+                                 "Envíame tu ubicación actual.")
+        return
+    if isinstance(with_tolls, BaseException):
+        logger.warning("Error routing %r: %r", journey, with_tolls)
+        await message.reply_text("No he podido calcular la ruta. Lo siento mucho 😞")
+        return
+    if isinstance(toll_free, BaseException):
+        logger.warning("Error routing %r without tolls: %r", journey, toll_free)
+        await ask_fuel(message, state, user_id, journey, gauge_steps)
+        return
+    if toll_free.coordinates == with_tolls.coordinates:
+        await ask_fuel(message, state, user_id, journey, gauge_steps)
+        return
+
+    minutes = round((toll_free.duration - with_tolls.duration) * config.time_multiplier / 60)
+    if minutes <= 0:
+        await ask_fuel(message, state, user_id, replace(journey, avoid_tolls=True), gauge_steps)
+        return
+
+    token = state.new_toll_token()
+    state.journeys[user_id] = replace(journey, toll_token=token, toll_minutes=minutes)
+    markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"Sí (-{minutes} min)", callback_data=f"tolls:{token}:yes"),
+        InlineKeyboardButton("No", callback_data=f"tolls:{token}:no"),
+    ]])
+    await message.reply_text("¿Quieres usar autopistas de peaje?", reply_markup=markup)
 
 
 async def ask_fuel(message, state, user_id, journey, gauge_steps):
@@ -139,7 +185,6 @@ async def gauge_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
     state = context.bot_data[STATE_KEY]
-    router = context.bot_data[ROUTER_KEY]
     user_id = query.from_user.id
     token, _, step = query.data.removeprefix("gauge:").partition(":")
     journey = state.journeys.get(user_id)
@@ -157,7 +202,38 @@ async def gauge_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     liters = parameters.tank_volume * int(step) / steps
     await query.edit_message_text(
         f"Combustible: {gauge_mark(int(step), steps)} ({car.number_text(round(liters, 1))} L)")
-    await run_search(query.message, state, router, user_id, journey, parameters, liters=liters)
+    await run_search(query.message, state, search_router(context, journey), user_id, journey, parameters,
+                     liters=liters)
+
+
+async def toll_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    state = context.bot_data[STATE_KEY]
+    user_id = query.from_user.id
+    token, _, choice = query.data.removeprefix("tolls:").partition(":")
+    journey = state.journeys.get(user_id)
+    parameters = await car.load_car(user_id)
+    if journey is None or journey.toll_token != token or choice not in ("yes", "no") or parameters is None:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text("Esta pregunta ha caducado.")
+        return
+
+    # A second press on the same keyboard must not send a second fuel question.
+    journey = replace(journey, toll_token=None, avoid_tolls=choice == "no")
+    state.journeys[user_id] = journey
+    label = "Peajes: No"
+    if choice == "yes":
+        label = f"Peajes: Sí (-{journey.toll_minutes} min)"
+    await query.edit_message_text(label)
+    await ask_fuel(query.message, state, user_id, journey, parameters.gauge_steps)
+
+
+def search_router(context, journey):
+    if journey.avoid_tolls:
+        return context.bot_data[TOLL_FREE_ROUTER_KEY]
+    return context.bot_data[ROUTER_KEY]
 
 
 async def run_search(message, state, router, user_id, journey, parameters, **fuel):
@@ -270,6 +346,7 @@ def build(token, *, request=None, get_updates_request=None, router=None):
     if router is None:
         router = Router(config.osrm_url)
     application.bot_data[ROUTER_KEY] = router
+    application.bot_data[TOLL_FREE_ROUTER_KEY] = Router(router.base_url, router.transport, exclude="toll")
 
     application.add_handler(CommandHandler("coche", car_command_handler))
     application.add_handler(CommandHandler("reiniciar", restart_command_handler))
@@ -278,6 +355,7 @@ def build(token, *, request=None, get_updates_request=None, router=None):
     application.add_handler(MessageHandler((filters.TEXT | filters.LOCATION) & ~filters.COMMAND, message_handler))
     application.add_handler(CallbackQueryHandler(car_button_handler, pattern=r"^car:"))
     application.add_handler(CallbackQueryHandler(gauge_button_handler, pattern=r"^gauge:"))
+    application.add_handler(CallbackQueryHandler(toll_button_handler, pattern=r"^tolls:"))
 
     return application
 

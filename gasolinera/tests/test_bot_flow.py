@@ -36,6 +36,9 @@ class Osrm:
 
     def __init__(self):
         self.planned = "ok"
+        self.tolls_s = 40.0
+        # "same", "down", "no_route", or the duration in seconds of another route.
+        self.toll_free = "same"
         self.requests = []
 
     def __call__(self, request):
@@ -53,17 +56,27 @@ class Osrm:
                 return httpx.Response(502, content=b"<html>Bad Gateway</html>")
             if self.planned == "no_route":
                 return httpx.Response(400, json={"code": "NoRoute", "message": "Impossible route"})
-            return httpx.Response(200, json={"code": "Ok", "routes": [{
-                "distance": 1000.0, "duration": 40.0,
-                "geometry": {"coordinates": [list(ORIGIN), [-3.699, 40.42]]},
-                "legs": [{"distance": 1000.0, "duration": 40.0,
-                          "annotation": {"distance": [1000.0], "duration": [40.0]}}],
-            }]})
+            if "exclude" not in request.url.params or self.toll_free == "same":
+                return planned_route([list(ORIGIN), [-3.699, 40.42]], self.tolls_s)
+            if self.toll_free == "down":
+                return httpx.Response(502, content=b"<html>Bad Gateway</html>")
+            if self.toll_free == "no_route":
+                return httpx.Response(400, json={"code": "NoRoute", "message": "Impossible route"})
+            return planned_route([list(ORIGIN), [-3.698, 40.43]], self.toll_free)
 
         return httpx.Response(200, json={"code": "Ok", "routes": [{
             "distance": 3000.0, "duration": 160.0,
             "legs": [{"distance": 1500.0, "duration": 80.0}, {"distance": 1500.0, "duration": 80.0}],
         }]})
+
+
+def planned_route(coordinates, duration):
+    return httpx.Response(200, json={"code": "Ok", "routes": [{
+        "distance": 1000.0, "duration": duration,
+        "geometry": {"coordinates": coordinates},
+        "legs": [{"distance": 1000.0, "duration": duration,
+                  "annotation": {"distance": [1000.0], "duration": [duration]}}],
+    }]})
 
 
 @pytest.fixture
@@ -526,7 +539,7 @@ def test_a_gauge_after_reiniciar(store, osrm):
     chat = talk(osrm, scenario)
 
     assert chat.texts()[-1] == EXPIRED_GAUGE
-    assert route_requests(osrm) == 0
+    assert route_requests(osrm) == 2
 
 
 def test_a_second_press_on_one_gauge(store, osrm):
@@ -540,7 +553,7 @@ def test_a_second_press_on_one_gauge(store, osrm):
     chat = talk(osrm, scenario)
 
     assert chat.texts()[-1] == EXPIRED_GAUGE
-    assert route_requests(osrm) == 1
+    assert route_requests(osrm) == 3
 
 
 def test_a_location_during_the_fuel_question_starts_a_new_journey(store, osrm):
@@ -643,3 +656,242 @@ def test_no_route_between_the_two_points_forgets_the_journey(store, osrm):
         "No encuentro una ruta por carretera entre el origen y el destino. Envíame tu ubicación actual.",
         ASK_DESTINATION,
     ]
+
+
+ASK_TOLLS = "¿Quieres usar autopistas de peaje?"
+
+
+def toll_questions(chat):
+    return [sent for sent in chat.sent
+            if sent.method == "sendMessage" and any(button["callback_data"].startswith("tolls:")
+                                                     for row in (sent.markup or {}).get("inline_keyboard", [])
+                                                     for button in row)]
+
+
+def search_excludes(osrm):
+    """The `exclude` of each route request after the two of the destination."""
+    return [request.url.params.get("exclude") for request in osrm.requests
+            if request.url.path.startswith("/route/")][2:]
+
+
+def tolls_save_time(osrm, toll_free_s=10_201.0):
+    osrm.tolls_s = 7400.0
+    osrm.toll_free = toll_free_s
+
+
+def test_same_routes_ask_no_toll_question(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("1/2")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[:2] == [ASK_DESTINATION, "Combustible: 1/2 (25 L)"]
+    assert toll_questions(chat) == []
+    assert search_excludes(osrm) == [None]
+
+
+@pytest.mark.parametrize("toll_free_s, label", [
+    (10_201.0, "Sí (-44 min)"),
+    (12_224.0, "Sí (-75 min)"),
+])
+def test_the_toll_question(store, osrm, toll_free_s, label):
+    store_car(store)
+    tolls_save_time(osrm, toll_free_s)
+
+    chat = talk(osrm, ask_fuel)
+
+    assert chat.texts() == [ASK_DESTINATION, "¿Quieres usar autopistas de peaje?"]
+    [question] = toll_questions(chat)
+    assert [[button["text"] for button in row] for row in question.markup["inline_keyboard"]] == [
+        [label, "No"]]
+
+
+def test_no_toll_question_when_the_tolls_save_no_time(store, osrm):
+    store_car(store)
+    tolls_save_time(osrm, 7420.0)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("1/2")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[:2] == [ASK_DESTINATION, "Combustible: 1/2 (25 L)"]
+    assert search_excludes(osrm) == ["toll"]
+
+
+def test_with_tolls(store, osrm):
+    store_car(store)
+    tolls_save_time(osrm)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("Sí (-44 min)")
+        await chat.press_labelled("1/2")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[:3] == [ASK_DESTINATION, "Peajes: Sí (-44 min)", "Combustible: 1/2 (25 L)"]
+    assert search_excludes(osrm) == [None]
+
+
+def test_without_tolls(store, osrm):
+    store_car(store)
+    tolls_save_time(osrm)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("No")
+        await chat.press_labelled("1/2")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[:3] == [ASK_DESTINATION, "Peajes: No", "Combustible: 1/2 (25 L)"]
+    assert search_excludes(osrm) == ["toll"]
+
+
+def test_every_detour_without_tolls(store, osrm):
+    store_car(store)
+    store_station(store)
+    tolls_save_time(osrm)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("No")
+        await chat.press_labelled("0")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.sent[-1].text.startswith("1. <a ")
+    assert search_excludes(osrm) == ["toll", "toll"]
+
+
+def test_the_toll_choice_survives_a_failed_search(store, osrm):
+    store_car(store)
+    tolls_save_time(osrm)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("No")
+        osrm.planned = "down"
+        await chat.press_labelled("1/2")
+        osrm.planned = "ok"
+        await chat.press_labelled("1/2")
+
+    chat = talk(osrm, scenario)
+
+    assert "No he podido calcular la ruta. Lo siento mucho 😞" in chat.texts()
+    assert len(gauges(chat)) == 2
+    assert search_excludes(osrm) == ["toll", "toll"]
+
+
+@pytest.mark.parametrize("toll_free", ["down", "no_route"])
+def test_a_failed_toll_free_route_asks_no_toll_question(store, osrm, toll_free):
+    store_car(store)
+    osrm.tolls_s = 7400.0
+    osrm.toll_free = toll_free
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("1/2")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[:2] == [ASK_DESTINATION, "Combustible: 1/2 (25 L)"]
+    assert search_excludes(osrm) == [None]
+
+
+def test_the_router_is_down_at_the_destination(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await chat.send_location(ORIGIN)
+        osrm.planned = "down"
+        await chat.send_location(DESTINATION)
+        osrm.planned = "ok"
+        await chat.send_location(DESTINATION)
+
+    assert talk(osrm, scenario).texts() == [
+        ASK_DESTINATION, "No he podido calcular la ruta. Lo siento mucho 😞", ASK_GAUGE]
+
+
+def test_no_road_at_the_destination_forgets_the_journey(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await chat.send_location(ORIGIN)
+        osrm.planned = "no_route"
+        await chat.send_location(DESTINATION)
+        osrm.planned = "ok"
+        await chat.send_location(ORIGIN)
+
+    assert talk(osrm, scenario).texts() == [
+        ASK_DESTINATION,
+        "No encuentro una ruta por carretera entre el origen y el destino. Envíame tu ubicación actual.",
+        ASK_DESTINATION,
+    ]
+
+
+@pytest.mark.parametrize("send", [
+    lambda chat: chat.send_location(ORIGIN),
+    lambda chat: chat.send_text("40.4168, -3.7038"),
+])
+def test_a_location_during_the_toll_question_starts_a_new_journey(store, osrm, send):
+    store_car(store)
+    tolls_save_time(osrm)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await send(chat)
+        await chat.send_location(DESTINATION)
+
+    assert talk(osrm, scenario).texts() == [ASK_DESTINATION, ASK_TOLLS, ASK_DESTINATION, ASK_TOLLS]
+
+
+def test_text_during_the_toll_question_gets_the_info_text(store, osrm):
+    store_car(store)
+    tolls_save_time(osrm)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.send_text("hola")
+        await chat.press_labelled("No")
+
+    assert talk(osrm, scenario).texts() == [ASK_DESTINATION, "Peajes: No", INFO, ASK_GAUGE]
+
+
+def test_a_second_press_on_one_toll_question(store, osrm):
+    store_car(store)
+    tolls_save_time(osrm)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        [question] = toll_questions(chat)
+        [with_tolls, without_tolls] = question.markup["inline_keyboard"][0]
+        await chat.press(without_tolls["callback_data"], question.message_id)
+        await chat.press(with_tolls["callback_data"], question.message_id)
+        await chat.press_labelled("1/2")
+
+    chat = talk(osrm, scenario)
+
+    assert EXPIRED_GAUGE in chat.texts()
+    assert len(gauges(chat)) == 1
+    assert search_excludes(osrm) == ["toll"]
+
+
+def test_a_toll_button_after_reiniciar(store, osrm):
+    store_car(store)
+    tolls_save_time(osrm)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.send_command("reiniciar")
+        await chat.press_labelled("No")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[-1] == EXPIRED_GAUGE
+    assert gauges(chat) == []

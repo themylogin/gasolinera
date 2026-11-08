@@ -29,9 +29,10 @@ class Route:
 
 
 class Router:
-    def __init__(self, base_url, transport=None):
+    def __init__(self, base_url, transport=None, exclude=None):
         self.base_url = base_url.rstrip("/")
         self.transport = transport
+        self.exclude = exclude
 
     async def distance_to_road(self, location):
         longitude, latitude = location
@@ -48,6 +49,8 @@ class Router:
         if segments:
             params = {"overview": "full", "steps": "false", "geometries": "geojson",
                       "annotations": "distance,duration"}
+        if self.exclude is not None:
+            params["exclude"] = self.exclude
 
         body = await self._get(f"/route/v1/driving/{coordinates}", params)
         try:

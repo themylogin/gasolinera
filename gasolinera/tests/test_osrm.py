@@ -87,6 +87,37 @@ def test_route_with_two_legs():
     assert route.coordinates == ()
 
 
+@pytest.mark.parametrize("segments", [False, True])
+def test_a_route_that_excludes_tolls(segments):
+    source = Source(one_leg())
+    toll_free = Router("http://osrm:5000", transport=httpx.MockTransport(source), exclude="toll")
+
+    asyncio.run(toll_free.route([(-3.7, 40.4), (-3.6, 40.5)], segments=segments))
+
+    [request] = source.requests
+    assert request.url.params["exclude"] == "toll"
+
+
+def test_the_nearest_request_excludes_nothing():
+    source = Source({"code": "Ok", "waypoints": [{"distance": 12.5}]})
+    toll_free = Router("http://osrm:5000", transport=httpx.MockTransport(source), exclude="toll")
+
+    asyncio.run(toll_free.distance_to_road((-3.7038, 40.4168)))
+
+    [request] = source.requests
+    assert "exclude" not in request.url.params
+
+
+@pytest.mark.parametrize("segments", [False, True])
+def test_a_route_without_exclude(segments):
+    source = Source(one_leg())
+
+    asyncio.run(router(source).route([(-3.7, 40.4), (-3.6, 40.5)], segments=segments))
+
+    [request] = source.requests
+    assert "exclude" not in request.url.params
+
+
 @pytest.mark.parametrize("code", ["NoRoute", "NoSegment"])
 def test_no_route(code):
     with pytest.raises(NoRoute):
