@@ -5,7 +5,7 @@ import re
 
 from .refuel import NoStop, station_link
 
-__all__ = ["INFO", "format_answer", "liters_error", "parse_liters", "parse_location"]
+__all__ = ["GAUGE", "INFO", "format_answer", "gauge_mark", "parse_location", "parse_range"]
 
 INFO = """Este bot busca dónde repostar más barato en tu ruta por España.
 
@@ -40,23 +40,40 @@ def parse_location(text):
     return longitude, latitude
 
 
-def parse_liters(text, tank_volume):
+# Sixteenths of the tank, as a fuel gauge reads. Each row is a quarter and
+# shows both of its ends, so a quarter mark appears twice with one value.
+GAUGE = (
+    (("1/1", 16), (".", 15), (".", 14), (".", 13), ("3/4", 12)),
+    (("3/4", 12), (".", 11), (".", 10), (".", 9), ("1/2", 8)),
+    (("1/2", 8), (".", 7), (".", 6), (".", 5), ("1/4", 4)),
+    (("1/4", 4), (".", 3), (".", 2), (".", 1)),
+)
+
+
+def gauge_mark(sixteenths):
+    for row in GAUGE:
+        for label, value in row:
+            if value == sixteenths and label != ".":
+                return label
+    return f"{sixteenths}/16"
+
+
+def parse_range(text):
     match = re.fullmatch(r"\s*(\d+)(?:[.,](\d+))?\s*", text)
     if match is None:
         return None
 
-    liters = float(".".join(filter(None, match.groups())))
-    if liters > tank_volume:
+    range_km = float(".".join(filter(None, match.groups())))
+    if range_km > 3000:
         return None
 
-    return liters
-
-
-def liters_error(tank_volume):
-    return f"Los litros deben ser un número de 0 a {tank_volume}, por ejemplo 12,5. Escríbelo de nuevo."
+    return range_km
 
 
 def format_answer(answer, fuel_label):
+    if isinstance(answer, NoStop) and answer.range_left is not None:
+        return f"No necesitas repostar: llegarás con {math.floor(answer.range_left)} km de autonomía."
+
     if isinstance(answer, NoStop):
         return f"No necesitas repostar: llegarás con {math.floor(answer.fuel_left)} L."
 

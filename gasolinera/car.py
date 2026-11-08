@@ -8,7 +8,8 @@ from . import db
 from .models import Car
 
 __all__ = ["FUEL_LABELS", "CarDialog", "CarParameters", "CarReply", "answer_button", "answer_text", "describe",
-           "load_car", "number_text", "parse_consumption", "parse_eur_per_hour", "parse_tank_volume", "save_car",
+           "load_car", "number_text", "parse_consumption", "parse_eur_per_hour", "parse_reserve_km", "parse_tank_volume",
+           "save_car",
            "start"]
 
 FUEL_LABELS = {
@@ -25,6 +26,7 @@ class CarParameters:
     consume_80: float
     consume_120: float
     eur_per_hour: float
+    reserve_km: float
 
 
 @dataclasses.dataclass(frozen=True)
@@ -35,6 +37,7 @@ class CarDialog:
     fuel_type: str | None = None
     consume_80: float | None = None
     consume_120: float | None = None
+    eur_per_hour: float | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -75,9 +78,17 @@ def answer_text(dialog, text):
             return CarReply(text="El valor de tu tiempo debe ser un número de 0 a 1000, por ejemplo 20. "
                                  "Escríbelo de nuevo.",
                             dialog=dialog)
+        return CarReply(text="¿Con cuántos kilómetros de autonomía quieres repostar? Escríbelo, por ejemplo 50.",
+                        dialog=dataclasses.replace(dialog, step="reserve_km", eur_per_hour=eur_per_hour))
+
+    if dialog.step == "reserve_km":
+        reserve_km = parse_reserve_km(text)
+        if reserve_km is None:
+            return CarReply(text="La reserva debe ser un número de 0 a 500 km, por ejemplo 50. Escríbelo de nuevo.",
+                            dialog=dialog)
         parameters = CarParameters(tank_volume=dialog.tank_volume, fuel_type=dialog.fuel_type,
                                    consume_80=dialog.consume_80, consume_120=dialog.consume_120,
-                                   eur_per_hour=eur_per_hour)
+                                   eur_per_hour=dialog.eur_per_hour, reserve_km=reserve_km)
         return CarReply(text=f"Tu coche está guardado.\n\n{describe(parameters)}", dialog=None, save=parameters)
 
     consumption = parse_consumption(text)
@@ -172,6 +183,14 @@ def parse_eur_per_hour(text):
     return eur_per_hour
 
 
+def parse_reserve_km(text):
+    reserve_km = _decimal(text)
+    if reserve_km is None or not 0 <= reserve_km <= 500:
+        return None
+
+    return reserve_km
+
+
 def describe(parameters):
     return "\n".join([
         f"Depósito: {parameters.tank_volume} L",
@@ -179,6 +198,7 @@ def describe(parameters):
         f"A 80 km/h: {number_text(parameters.consume_80)} L/100 km",
         f"A 120 km/h: {number_text(parameters.consume_120)} L/100 km",
         f"Tu tiempo: {number_text(parameters.eur_per_hour)} €/h",
+        f"Reserva: {number_text(parameters.reserve_km)} km",
     ])
 
 
@@ -195,7 +215,7 @@ async def load_car(telegram_user_id):
         return None
 
     return CarParameters(tank_volume=row.tank_volume, fuel_type=row.fuel_type, consume_80=row.consume_80,
-                         consume_120=row.consume_120, eur_per_hour=row.eur_per_hour)
+                         consume_120=row.consume_120, eur_per_hour=row.eur_per_hour, reserve_km=row.reserve_km)
 
 
 async def save_car(telegram_user_id, parameters):

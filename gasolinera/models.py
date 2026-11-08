@@ -54,3 +54,4 @@ class Car(Base):
     consume_80: Mapped[float] = mapped_column(Float, nullable=False)
     consume_120: Mapped[float] = mapped_column(Float, nullable=False)
     eur_per_hour: Mapped[float] = mapped_column(Float, nullable=False)
+    reserve_km: Mapped[float] = mapped_column(Float, nullable=False, server_default="50")

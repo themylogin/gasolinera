@@ -35,7 +35,7 @@ def test_typed_coordinates(text, location):
 
 
 def test_a_decimal_comma_reads_as_coordinates():
-    # This is why the bot reads liters first when the fuel question is open.
+    # This is why the bot reads a range first when the fuel question is open.
     assert journey.parse_location("12,5") == (5.0, 12.0)
 
 
@@ -44,18 +44,36 @@ def test_text_that_is_no_location(text):
     assert journey.parse_location(text) is None
 
 
-@pytest.mark.parametrize("text, liters", [("12,5", 12.5), ("10", 10.0), (" 0 ", 0.0), ("50", 50.0), ("7.25", 7.25)])
-def test_liters(text, liters):
-    assert journey.parse_liters(text, 50) == liters
+def test_the_gauge_rows():
+    assert [[label for label, _value in row] for row in journey.GAUGE] == [
+        ["1/1", ".", ".", ".", "3/4"],
+        ["3/4", ".", ".", ".", "1/2"],
+        ["1/2", ".", ".", ".", "1/4"],
+        ["1/4", ".", ".", "."],
+    ]
+    assert [[value for _label, value in row] for row in journey.GAUGE] == [
+        [16, 15, 14, 13, 12],
+        [12, 11, 10, 9, 8],
+        [8, 7, 6, 5, 4],
+        [4, 3, 2, 1],
+    ]
 
 
-@pytest.mark.parametrize("text", ["60", "50,1", "-1", "diez", "", "40.42, -3.70"])
-def test_wrong_liters(text):
-    assert journey.parse_liters(text, 50) is None
+@pytest.mark.parametrize("sixteenths, mark", [(16, "1/1"), (12, "3/4"), (8, "1/2"), (4, "1/4"), (13, "13/16"),
+                                              (1, "1/16")])
+def test_gauge_marks(sixteenths, mark):
+    assert journey.gauge_mark(sixteenths) == mark
 
 
-def test_the_liters_error_names_the_tank_volume():
-    assert journey.liters_error(50) == "Los litros deben ser un número de 0 a 50, por ejemplo 12,5. Escríbelo de nuevo."
+@pytest.mark.parametrize("text, range_km", [("120", 120.0), ("87,5", 87.5), ("0", 0.0), ("3000", 3000.0),
+                                            (" 7.25 ", 7.25)])
+def test_a_range(text, range_km):
+    assert journey.parse_range(text) == range_km
+
+
+@pytest.mark.parametrize("text", ["3001", "-1", "mucho", "", "40.42, -3.70", "1/2"])
+def test_text_that_is_not_a_range(text):
+    assert journey.parse_range(text) is None
 
 
 def test_the_info_text():
@@ -80,6 +98,11 @@ def test_the_info_text():
 
 def test_no_stop_is_needed():
     assert journey.format_answer(NoStop(fuel_left=12.7), "Diésel") == "No necesitas repostar: llegarás con 12 L."
+
+
+def test_no_stop_is_needed_with_a_range():
+    assert journey.format_answer(NoStop(range_left=83.4), "Diésel") == (
+        "No necesitas repostar: llegarás con 83 km de autonomía.")
 
 
 def test_no_station_is_near():

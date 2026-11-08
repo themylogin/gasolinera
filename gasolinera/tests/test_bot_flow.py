@@ -21,12 +21,14 @@ ASK_FUEL = "Elige el tipo de combustible."
 ASK_80 = "Escribe el consumo a 80 km/h en litros por 100 km."
 ASK_120 = "Escribe el consumo a 120 km/h en litros por 100 km."
 ASK_TIME = "¿Cuánto vale tu tiempo? Escríbelo en €/h, por ejemplo 20."
+ASK_RESERVE = "¿Con cuántos kilómetros de autonomía quieres repostar? Escríbelo, por ejemplo 50."
 ASK_DESTINATION = "Ahora envíame el destino."
-ASK_LITERS = "¿Cuántos litros de combustible te quedan?"
+ASK_GAUGE = "¿Cuánto combustible te queda? Elige en el indicador o escribe los kilómetros de autonomía."
+EXPIRED_GAUGE = "Esta pregunta ha caducado."
 EXPIRED = "Esta pregunta ha caducado. Envía /coche para empezar de nuevo."
 SAVED_DIESEL = ("Tu coche está guardado.\n\n"
                 "Depósito: 50 L\nCombustible: Diésel\nA 80 km/h: 5,8 L/100 km\nA 120 km/h: 7 L/100 km\n"
-                "Tu tiempo: 20 €/h")
+                "Tu tiempo: 20 €/h\nReserva: 50 km")
 
 
 class Osrm:
@@ -81,7 +83,7 @@ def talk(osrm, scenario):
 
 def store_car(db_path, tank_volume=50, fuel_type="diesel"):
     with sqlite3.connect(db_path) as connection:
-        connection.execute("INSERT INTO car VALUES (?, ?, ?, 5.8, 7.0, 20.0)", (USER_ID, tank_volume, fuel_type))
+        connection.execute("INSERT INTO car VALUES (?, ?, ?, 5.8, 7.0, 20.0, 50.0)", (USER_ID, tank_volume, fuel_type))
 
 
 def stored_cars(db_path):
@@ -105,6 +107,7 @@ async def enter_car(chat):
     await chat.send_text("5,8")
     await chat.send_text("7")
     await chat.send_text("20")
+    await chat.send_text("50")
 
 
 # /coche
@@ -113,8 +116,8 @@ async def enter_car(chat):
 def test_a_new_car(store, osrm):
     chat = talk(osrm, enter_car)
 
-    assert chat.texts() == [ASK_TANK, "Combustible: Diésel", ASK_80, ASK_120, ASK_TIME, SAVED_DIESEL]
-    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0)]
+    assert chat.texts() == [ASK_TANK, "Combustible: Diésel", ASK_80, ASK_120, ASK_TIME, ASK_RESERVE, SAVED_DIESEL]
+    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0)]
 
 
 def test_the_fuel_question_has_three_buttons(store, osrm):
@@ -161,9 +164,9 @@ def test_a_user_with_a_car_keeps_it(store, osrm):
 
     assert chat.texts()[0] == ("Tu coche:\n\n"
                                "Depósito: 50 L\nCombustible: Diésel\nA 80 km/h: 5,8 L/100 km\nA 120 km/h: 7 L/100 km\n"
-                               "Tu tiempo: 20 €/h\n\n¿Quieres cambiarlo?")
+                               "Tu tiempo: 20 €/h\nReserva: 50 km\n\n¿Quieres cambiarlo?")
     assert chat.texts()[-1] == "Tu coche no ha cambiado."
-    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0)]
+    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0)]
 
 
 def test_a_user_with_a_car_changes_it(store, osrm):
@@ -177,10 +180,11 @@ def test_a_user_with_a_car_changes_it(store, osrm):
         await chat.send_text("6")
         await chat.send_text("8")
         await chat.send_text("15")
+        await chat.send_text("70")
 
     talk(osrm, scenario)
 
-    assert stored_cars(store) == [(USER_ID, 60, "gasoline_95", 6.0, 8.0, 15.0)]
+    assert stored_cars(store) == [(USER_ID, 60, "gasoline_95", 6.0, 8.0, 15.0, 70.0)]
 
 
 def test_a_dialog_that_stops_changes_no_car(store, osrm):
@@ -195,7 +199,7 @@ def test_a_dialog_that_stops_changes_no_car(store, osrm):
 
     talk(osrm, scenario)
 
-    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0)]
+    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0)]
 
 
 def test_coche_twice_starts_again(store, osrm):
@@ -243,23 +247,101 @@ def test_a_failed_save(store, osrm, monkeypatch):
 # The journey
 
 
+def gauges(chat):
+    """Every gauge the bot sent, as it was sent: a press edits the buttons away."""
+    return [sent for sent in chat.sent
+            if sent.method == "sendMessage" and any(button["callback_data"].startswith("gauge:")
+                                                     for row in (sent.markup or {}).get("inline_keyboard", [])
+                                                     for button in row)]
+
+
+async def press_gauge(chat, sixteenths, gauge=-1):
+    message = gauges(chat)[gauge]
+    for row in message.markup["inline_keyboard"]:
+        for button in row:
+            if button["callback_data"].endswith(f":{sixteenths}"):
+                await chat.press(button["callback_data"], message.message_id)
+                return
+    raise AssertionError(f"no gauge button for {sixteenths}/16")
+
+
+def route_requests(osrm):
+    return sum(1 for request in osrm.requests if request.url.path.startswith("/route/"))
+
+
+async def ask_fuel(chat):
+    await chat.send_location(ORIGIN)
+    await chat.send_location(DESTINATION)
+
+
 def test_a_complete_journey(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("1/4")
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts() == [ASK_DESTINATION, "Combustible: 1/4 (12,5 L)", "No necesitas repostar: llegarás con 12 L."]
+
+
+def test_the_answer_lists_the_stations(store, osrm):
     store_car(store)
     store_station(store)
 
     async def scenario(chat):
-        await chat.send_location(ORIGIN)
-        await chat.send_location(DESTINATION)
-        await chat.send_text("5")
+        await ask_fuel(chat)
+        await press_gauge(chat, 1)
 
     chat = talk(osrm, scenario)
 
-    assert chat.texts()[:2] == [ASK_DESTINATION, ASK_LITERS]
     answer = chat.sent[-1]
     assert answer.text.startswith("1. <a ")
     assert "\n1,689 €/L · " in answer.text
     assert answer.parameters["parse_mode"] == "HTML"
     assert answer.parameters["link_preview_options"] == {"is_disabled": True}
+
+
+def test_the_gauge_keyboard(store, osrm):
+    store_car(store)
+
+    chat = talk(osrm, ask_fuel)
+
+    [gauge] = gauges(chat)
+    assert gauge.text == ASK_GAUGE
+    assert [[button["text"] for button in row] for row in gauge.markup["inline_keyboard"]] == [
+        ["1/1", ".", ".", ".", "3/4"],
+        ["3/4", ".", ".", ".", "1/2"],
+        ["1/2", ".", ".", ".", "1/4"],
+        ["1/4", ".", ".", "."],
+    ]
+
+
+@pytest.mark.parametrize("nth_from_end", [0, 1])
+def test_both_3_4_buttons_mean_three_quarters(store, osrm, nth_from_end):
+    store_car(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("3/4", nth_from_end=nth_from_end)
+
+    assert talk(osrm, scenario).texts()[1] == "Combustible: 3/4 (37,5 L)"
+
+
+@pytest.mark.parametrize("sixteenths, pressed", [(8, "Combustible: 1/2 (25 L)"),
+                                                 (13, "Combustible: 13/16 (40,6 L)")])
+def test_the_pressed_question(store, osrm, sixteenths, pressed):
+    store_car(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await press_gauge(chat, sixteenths)
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[1] == pressed
+    assert [sent.parameters.get("reply_markup") for sent in chat.sent if sent.method == "editMessageText"] == [None]
 
 
 def test_typed_coordinates_are_a_location(store, osrm):
@@ -302,34 +384,77 @@ def test_a_location_far_from_the_road_is_refused(store, osrm):
     assert talk(osrm, scenario).texts() == [
         ASK_DESTINATION,
         "🇪🇸 Esta ubicación no está a menos de 1 km de ninguna carretera de España.",
-        ASK_LITERS,
+        ASK_GAUGE,
     ]
 
 
-def test_liters_with_a_decimal_comma(store, osrm):
+def test_a_typed_range(store, osrm):
     store_car(store)
 
     async def scenario(chat):
-        await chat.send_location(ORIGIN)
-        await chat.send_location(DESTINATION)
-        await chat.send_text("12,5")
+        await ask_fuel(chat)
+        await chat.send_text("87,5")
 
-    assert talk(osrm, scenario).texts()[-1] == "No necesitas repostar: llegarás con 12 L."
+    assert talk(osrm, scenario).texts()[-1] == "No necesitas repostar: llegarás con 86 km de autonomía."
 
 
-def test_more_liters_than_the_tank(store, osrm):
+def test_text_that_is_not_a_range(store, osrm):
     store_car(store)
 
     async def scenario(chat):
-        await chat.send_location(ORIGIN)
-        await chat.send_location(DESTINATION)
-        await chat.send_text("60")
-        await chat.send_text("12,5")
+        await ask_fuel(chat)
+        await chat.send_text("mucho")
+        await chat.send_text("120")
 
     assert talk(osrm, scenario).texts()[-2:] == [
-        "Los litros deben ser un número de 0 a 50, por ejemplo 12,5. Escríbelo de nuevo.",
-        "No necesitas repostar: llegarás con 12 L.",
+        "Elige en el indicador o escribe los kilómetros de autonomía, por ejemplo 120.",
+        "No necesitas repostar: llegarás con 119 km de autonomía.",
     ]
+
+
+def test_a_gauge_from_an_earlier_journey(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.press_labelled("1/1")
+        await ask_fuel(chat)
+        await press_gauge(chat, 8, gauge=0)
+        await press_gauge(chat, 8, gauge=-1)
+
+    chat = talk(osrm, scenario)
+
+    # The press on the new gauge edits that message in place, so it reads before the expiry notice.
+    assert chat.texts()[-3:] == ["Combustible: 1/2 (25 L)", EXPIRED_GAUGE, "No necesitas repostar: llegarás con 24 L."]
+    assert any(sent.method == "editMessageReplyMarkup" for sent in chat.sent)
+
+
+def test_a_gauge_after_reiniciar(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await chat.send_command("reiniciar")
+        await press_gauge(chat, 8)
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[-1] == EXPIRED_GAUGE
+    assert route_requests(osrm) == 0
+
+
+def test_a_second_press_on_one_gauge(store, osrm):
+    store_car(store)
+
+    async def scenario(chat):
+        await ask_fuel(chat)
+        await press_gauge(chat, 8)
+        await press_gauge(chat, 4)
+
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[-1] == EXPIRED_GAUGE
+    assert route_requests(osrm) == 1
 
 
 def test_a_location_during_the_fuel_question_starts_a_new_journey(store, osrm):
@@ -341,7 +466,7 @@ def test_a_location_during_the_fuel_question_starts_a_new_journey(store, osrm):
         await chat.send_location(DESTINATION)
         await chat.send_location(ORIGIN)
 
-    assert talk(osrm, scenario).texts() == [ASK_DESTINATION, ASK_LITERS, ASK_DESTINATION, ASK_LITERS]
+    assert talk(osrm, scenario).texts() == [ASK_DESTINATION, ASK_GAUGE, ASK_DESTINATION, ASK_GAUGE]
 
 
 def test_the_answer_ends_the_journey(store, osrm):
@@ -367,7 +492,7 @@ def test_reiniciar_resets_the_journey_but_not_the_car(store, osrm):
     chat = talk(osrm, scenario)
 
     assert chat.texts() == [ASK_DESTINATION, "Envíame tu ubicación actual.", ASK_DESTINATION]
-    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0)]
+    assert stored_cars(store) == [(USER_ID, 50, "diesel", 5.8, 7.0, 20.0, 50.0)]
 
 
 @pytest.mark.parametrize("send", [
@@ -394,24 +519,28 @@ def test_info_keeps_the_journey(store, osrm):
         await chat.send_command("info")
         await chat.send_location(DESTINATION)
 
-    assert talk(osrm, scenario).texts() == [ASK_DESTINATION, INFO, ASK_LITERS]
+    assert talk(osrm, scenario).texts() == [ASK_DESTINATION, INFO, ASK_GAUGE]
 
 
-def test_a_router_that_is_down_keeps_the_fuel_question(store, osrm):
+def test_a_router_that_is_down_asks_again_with_a_new_gauge(store, osrm):
     store_car(store)
 
     async def scenario(chat):
-        await chat.send_location(ORIGIN)
-        await chat.send_location(DESTINATION)
+        await ask_fuel(chat)
         osrm.planned = "down"
-        await chat.send_text("10")
+        await chat.press_labelled("1/2")
         osrm.planned = "ok"
-        await chat.send_text("10")
+        await chat.press_labelled("1/2")
 
-    assert talk(osrm, scenario).texts()[-2:] == [
+    chat = talk(osrm, scenario)
+
+    assert chat.texts()[1:] == [
+        "Combustible: 1/2 (25 L)",
         "No he podido calcular la ruta. Lo siento mucho 😞",
-        "No necesitas repostar: llegarás con 9 L.",
+        "Combustible: 1/2 (25 L)",
+        "No necesitas repostar: llegarás con 24 L.",
     ]
+    assert len({gauge.markup["inline_keyboard"][0][0]["callback_data"] for gauge in gauges(chat)}) == 2
 
 
 def test_no_route_between_the_two_points_forgets_the_journey(store, osrm):

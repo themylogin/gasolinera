@@ -14,8 +14,8 @@ from .models import GasStation
 from .opening_hours import OpeningState, state_at
 from .osrm import NoRoute
 
-__all__ = ["Candidate", "Listed", "NoStop", "Stops", "candidates", "consumption_at", "fuel_walk", "search",
-           "segment_speed", "station_link", "station_zone", "stop_cost"]
+__all__ = ["Candidate", "Listed", "NoStop", "Stops", "candidates", "consumption_at", "fuel_walk", "range_walk",
+           "search", "segment_speed", "station_link", "station_zone", "stop_cost"]
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,8 @@ class Listed:
 
 @dataclass(frozen=True)
 class NoStop:
-    fuel_left: float
+    fuel_left: float | None = None
+    range_left: float | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,21 @@ def fuel_walk(route, parameters, fuel):
     if fuel <= 5:
         return len(route.segment_distance), fuel
     return None, fuel
+
+
+def range_walk(route, range_km, reserve_km):
+    """The index of the first point with `reserve_km` or less of range left, and the range left there.
+
+    The index is None when more than `reserve_km` is left at the destination.
+    """
+    for index, distance in enumerate(route.segment_distance):
+        if range_km <= reserve_km:
+            return index, range_km
+        range_km -= distance / 1000
+
+    if range_km <= reserve_km:
+        return len(route.segment_distance), range_km
+    return None, range_km
 
 
 def _segment_consumption(parameters, distance, duration):
@@ -129,17 +145,28 @@ def station_link(latitude, longitude):
     return f"https://www.google.com/maps/search/?{query}"
 
 
-async def search(router, origin, destination, parameters, liters, now):
-    """`NoStop` or `Stops` for a journey. `now` is an aware datetime.
+async def search(router, origin, destination, parameters, now, *, liters=None, range_km=None):
+    """`NoStop` or `Stops` for a journey, from the fuel in liters or from the range in km.
 
-    A `RouterUnavailable` of any request and a `NoRoute` of the planned route go out unchanged.
+    `now` is an aware datetime. A `RouterUnavailable` of any request and a `NoRoute` of the planned route go out
+    unchanged.
     """
-    route = await router.route([origin, destination], segments=True)
-    search_index, fuel_left = fuel_walk(route, parameters, liters)
-    if search_index is None:
-        return NoStop(fuel_left=fuel_left)
+    if (liters is None) == (range_km is None):
+        raise ValueError("a search takes either liters or range_km")
 
-    stop_liters = parameters.tank_volume - fuel_left
+    route = await router.route([origin, destination], segments=True)
+    if liters is not None:
+        search_index, fuel_left = fuel_walk(route, parameters, liters)
+        if search_index is None:
+            return NoStop(fuel_left=fuel_left)
+        stop_liters = parameters.tank_volume - fuel_left
+    else:
+        search_index, range_left = range_walk(route, range_km, parameters.reserve_km)
+        if search_index is None:
+            return NoStop(range_left=range_left)
+        # The fuel at the search point is not known. Every candidate buys the
+        # same amount, so it only weighs the price against the detour time.
+        stop_liters = parameters.tank_volume - 5
     found = await candidates(route.coordinates[search_index], parameters.fuel_type)
     requests = asyncio.Semaphore(4)
 

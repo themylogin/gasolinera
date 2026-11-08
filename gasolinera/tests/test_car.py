@@ -9,7 +9,8 @@ from ..car import CarDialog, CarParameters
 from ..fuels import FUEL_GROUPS
 
 FUEL_BUTTONS = ((("Gasolina 95", "gasoline_95"),), (("Gasolina 98", "gasoline_98"),), (("Diésel", "diesel"),))
-DIESEL = CarParameters(tank_volume=50, fuel_type="diesel", consume_80=5.8, consume_120=7.0, eur_per_hour=20.0)
+DIESEL = CarParameters(tank_volume=50, fuel_type="diesel", consume_80=5.8, consume_120=7.0, eur_per_hour=20.0,
+                       reserve_km=50.0)
 
 
 def dialog(step, **values):
@@ -90,22 +91,51 @@ def test_an_equal_consumption_at_120_asks_the_value_of_time():
     assert reply.dialog.step == "eur_per_hour"
 
 
-def test_the_value_of_time_saves_the_car():
+def test_the_value_of_time_asks_the_reserve():
     open_dialog = dialog("eur_per_hour", tank_volume=50, fuel_type="diesel", consume_80=5.8, consume_120=7.0)
 
     reply = car.answer_text(open_dialog, "20")
+
+    assert reply.text == "¿Con cuántos kilómetros de autonomía quieres repostar? Escríbelo, por ejemplo 50."
+    assert reply.save is None
+    assert reply.dialog == dialog("reserve_km", tank_volume=50, fuel_type="diesel", consume_80=5.8,
+                                  consume_120=7.0, eur_per_hour=20.0)
+
+
+def reserve_dialog(eur_per_hour=20.0):
+    return dialog("reserve_km", tank_volume=50, fuel_type="diesel", consume_80=5.8, consume_120=7.0,
+                  eur_per_hour=eur_per_hour)
+
+
+def test_the_reserve_saves_the_car():
+    reply = car.answer_text(reserve_dialog(), "50")
 
     assert reply.save == DIESEL
     assert reply.dialog is None
     assert reply.text == ("Tu coche está guardado.\n\n"
                           "Depósito: 50 L\nCombustible: Diésel\nA 80 km/h: 5,8 L/100 km\nA 120 km/h: 7 L/100 km\n"
-                          "Tu tiempo: 20 €/h")
+                          "Tu tiempo: 20 €/h\nReserva: 50 km")
+
+
+def test_a_reserve_of_60():
+    assert car.answer_text(reserve_dialog(), "60").save.reserve_km == 60
 
 
 def test_time_that_costs_nothing():
     open_dialog = dialog("eur_per_hour", tank_volume=50, fuel_type="diesel", consume_80=5.8, consume_120=7.0)
 
-    assert car.answer_text(open_dialog, "0").save.eur_per_hour == 0
+    reserve = car.answer_text(open_dialog, "0").dialog
+
+    assert car.answer_text(reserve, "50").save.eur_per_hour == 0
+
+
+@pytest.mark.parametrize("text", ["600", "-5", "cincuenta", ""])
+def test_a_wrong_reserve_is_asked_again(text):
+    reply = car.answer_text(reserve_dialog(), text)
+
+    assert reply.text == "La reserva debe ser un número de 0 a 500 km, por ejemplo 50. Escríbelo de nuevo."
+    assert reply.save is None
+    assert reply.dialog == reserve_dialog()
 
 
 @pytest.mark.parametrize("text", ["1500", "-5", "veinte"])
@@ -123,7 +153,7 @@ def test_a_user_with_a_car_sees_it():
 
     assert reply.text == ("Tu coche:\n\n"
                           "Depósito: 50 L\nCombustible: Diésel\nA 80 km/h: 5,8 L/100 km\nA 120 km/h: 7 L/100 km\n"
-                          "Tu tiempo: 20 €/h\n\n¿Quieres cambiarlo?")
+                          "Tu tiempo: 20 €/h\nReserva: 50 km\n\n¿Quieres cambiarlo?")
     assert reply.buttons == ((("Sí", "yes"), ("No", "no")),)
 
 
@@ -170,7 +200,7 @@ def test_a_saved_car_is_loaded(store):
 
 def test_a_second_save_replaces_the_first(store):
     asyncio.run(car.save_car(777001, DIESEL))
-    asyncio.run(car.save_car(777001, CarParameters(60, "gasoline_95", 6.0, 8.0, 15.0)))
+    asyncio.run(car.save_car(777001, CarParameters(60, "gasoline_95", 6.0, 8.0, 15.0, 70.0)))
 
     with sqlite3.connect(store) as connection:
         assert connection.execute("SELECT telegram_user_id, fuel_type FROM car").fetchall() == [(777001, "gasoline_95")]
@@ -182,6 +212,6 @@ def test_no_car(store):
 
 def test_a_car_of_an_unknown_group_is_no_car(store):
     with sqlite3.connect(store) as connection:
-        connection.execute("INSERT INTO car VALUES (777001, 50, 'lpg', 6, 7, 20)")
+        connection.execute("INSERT INTO car VALUES (777001, 50, 'lpg', 6, 7, 20, 50)")
 
     assert asyncio.run(car.load_car(777001)) is None

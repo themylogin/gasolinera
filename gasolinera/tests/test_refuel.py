@@ -16,7 +16,8 @@ from ..osrm import NoRoute, Route, RouterUnavailable
 ORIGIN = (-3.70, 40.42)
 DESTINATION = (2.17, 41.39)
 NOW = datetime.datetime(2026, 11, 7, 18, 0, tzinfo=datetime.timezone.utc)
-DIESEL = CarParameters(tank_volume=50, fuel_type="diesel", consume_80=6.0, consume_120=8.0, eur_per_hour=20.0)
+DIESEL = CarParameters(tank_volume=50, fuel_type="diesel", consume_80=6.0, consume_120=8.0, eur_per_hour=20.0,
+                       reserve_km=50.0)
 
 
 @pytest.fixture
@@ -74,7 +75,11 @@ def insert_station(db_path, station_id, latitude, longitude, prices, province="M
 
 
 def search(router, liters=5.0, parameters=DIESEL, now=NOW):
-    return asyncio.run(refuel.search(router, ORIGIN, DESTINATION, parameters, liters, now))
+    return asyncio.run(refuel.search(router, ORIGIN, DESTINATION, parameters, now, liters=liters))
+
+
+def search_range(router, range_km, parameters=DIESEL):
+    return asyncio.run(refuel.search(router, ORIGIN, DESTINATION, parameters, NOW, range_km=range_km))
 
 
 # The time correction
@@ -131,6 +136,72 @@ def test_no_stop_is_needed_when_the_fuel_lasts(store):
 
     assert answer == refuel.NoStop(fuel_left=pytest.approx(17.0))
     assert len(router.calls) == 1
+
+
+# A search from a range
+
+
+@pytest.mark.parametrize("inputs", [{}, {"liters": 10.0, "range_km": 100.0}])
+def test_a_search_takes_either_liters_or_a_range(inputs):
+    router = StubRouter(planned())
+
+    with pytest.raises(ValueError):
+        asyncio.run(refuel.search(router, ORIGIN, DESTINATION, DIESEL, NOW, **inputs))
+    assert router.calls == []
+
+
+def test_the_range_reaches_the_reserve_on_the_route():
+    route = planned(((10000.0, 300.0),) * 10)
+
+    index, range_left = refuel.range_walk(route, 80.0, 50.0)
+
+    assert index == 3
+    assert range_left == pytest.approx(50.0)
+
+
+def test_a_range_below_the_reserve_searches_at_the_origin():
+    assert refuel.range_walk(planned(((10000.0, 300.0),) * 3), 40.0, 50.0) == (0, 40.0)
+
+
+def test_a_range_uses_no_consumption():
+    route = planned(((10000.0, 300.0),) * 10)
+    thirsty = replace(DIESEL, consume_80=29.0, consume_120=29.5)
+
+    assert refuel.range_walk(route, 80.0, thirsty.reserve_km) == refuel.range_walk(route, 80.0, DIESEL.reserve_km)
+
+
+def test_a_short_trip_with_a_range(store):
+    router = StubRouter(planned(((100000.0, 3600.0),)))
+
+    answer = search_range(router, 183.4)
+
+    assert answer == refuel.NoStop(range_left=pytest.approx(83.4))
+    assert len(router.calls) == 1
+
+
+def test_a_range_that_leaves_only_the_reserve_needs_a_stop(store):
+    insert_station(store, 1, 40.42, -3.70, {"Precio Gasoleo A": "1,800"})
+
+    answer = search_range(StubRouter(planned(((100000.0, 3600.0),))), 150.0)
+
+    assert isinstance(answer, refuel.Stops)
+
+
+def test_a_stop_from_a_range_buys_the_tank_minus_5_l(store):
+    insert_station(store, 1, 40.42, -3.70, {"Precio Gasoleo A": "1,800"})
+
+    assert search_range(StubRouter(planned()), 10.0).liters == 45
+
+
+def test_the_reserve_of_the_car_places_the_search_point(store):
+    insert_station(store, 1, 40.42, -3.70, {"Precio Gasoleo A": "1,800"})
+    route = planned(((10000.0, 300.0),) * 10)
+
+    no_stop = search_range(StubRouter(route), 150.0, parameters=replace(DIESEL, reserve_km=40.0))
+    stop = search_range(StubRouter(route), 150.0, parameters=replace(DIESEL, reserve_km=60.0))
+
+    assert no_stop == refuel.NoStop(range_left=pytest.approx(50.0))
+    assert isinstance(stop, refuel.Stops)
 
 
 # The planned route and the candidates

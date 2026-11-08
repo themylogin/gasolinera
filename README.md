@@ -62,10 +62,15 @@ make bot
 In Telegram:
 
 1. `/coche` asks the tank volume, the fuel type, the consumption at 80 km/h
-   and at 120 km/h, and what an hour of your time is worth.
+   and at 120 km/h, what an hour of your time is worth, and the reserve: how
+   many kilometers of range you want left when you refuel.
 2. Send your location, then the destination. A location is a shared
    location or `lat, lon` text.
-3. Send the liters left in the tank.
+3. Press the fuel gauge mark nearest to your fuel level, or type the range in
+   kilometers that your car shows.
+
+With the gauge, the bot plans the stop where the tank holds 5 L. With a typed
+range, it plans the stop where the range drops to your reserve.
 
 The bot lists the 10 stops with the lowest cost: the fuel for a full tank,
 plus the detour time at your hourly value. It warns when a station will be
