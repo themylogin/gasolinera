@@ -264,6 +264,56 @@ def test_a_list_with_no_valid_entry_changes_nothing(store, feed):
     assert list(rows(store)) == [9999]
 
 
+def store_100_stations(db_path):
+    for station_id in range(1001, 1101):
+        insert_station(db_path, station_id, 40.0, -3.0)
+
+
+def list_of(feed, valid, skipped=0):
+    valid_entries = [entry(feed, "4375") | {"IDEESS": str(station_id)} for station_id in range(1, valid + 1)]
+    skipped_entries = [entry(feed, "11988") | {"IDEESS": str(station_id)} for station_id in range(501, 501 + skipped)]
+    feed["ListaEESSPrecio"] = valid_entries + skipped_entries
+    return feed
+
+
+def test_a_truncated_list_changes_nothing(store, feed, caplog):
+    store_100_stations(store)
+    before = rows(store)
+
+    with caplog.at_level(logging.ERROR):
+        status, _ = run(list_of(feed, 89))
+
+    assert status != 0
+    assert rows(store) == before
+    assert "The list has 89 stations, fewer than 90% of the 100 stored ones; the store is unchanged" in caplog.text
+
+
+def test_a_list_at_the_limit_replaces_the_store(store, feed):
+    store_100_stations(store)
+
+    status, _ = run(list_of(feed, 90))
+
+    assert status == 0
+    assert sorted(rows(store)) == list(range(1, 91))
+
+
+def test_a_list_with_many_skipped_entries_changes_nothing(store, feed):
+    store_100_stations(store)
+    before = rows(store)
+
+    status, _ = run(list_of(feed, 89, skipped=11))
+
+    assert status != 0
+    assert rows(store) == before
+
+
+def test_the_first_run_fills_an_empty_store(store, feed):
+    status, _ = run(feed)
+
+    assert status == 0
+    assert sorted(rows(store)) == [4375, 7901]
+
+
 def test_the_run_logs_the_feed_date_and_the_counts(store, feed, caplog):
     with caplog.at_level(logging.INFO):
         run(feed)

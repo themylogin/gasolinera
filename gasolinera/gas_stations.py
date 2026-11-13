@@ -6,7 +6,7 @@ import logging
 import sys
 
 import httpx
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, func, insert, select
 
 from . import db
 from .config import config
@@ -127,6 +127,11 @@ async def update(transport=None):
         return 1
 
     async with db.Session() as session, session.begin():
+        stored = await session.scalar(select(func.count()).select_from(GasStation))
+        if len(stations) * 10 < stored * 9:
+            logger.error("The list has %d stations, fewer than 90%% of the %d stored ones; the store is unchanged",
+                         len(stations), stored)
+            return 1
         await session.execute(delete(GasStation))
         await session.execute(insert(GasStation), stations)
 
