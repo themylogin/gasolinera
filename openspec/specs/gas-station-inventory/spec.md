@@ -127,30 +127,42 @@ The run SHALL exit with a non-zero status and SHALL NOT change the store when on
 
 ### Requirement: A list much shorter than the store changes nothing
 
-When the store holds stations, a run SHALL count the valid stations of the list. When that count is less than 90 % of the stored count, the run SHALL NOT change the store, SHALL log both counts, and SHALL exit with a non-zero status. An empty store SHALL accept any list with at least one valid station.
+A run SHALL count the valid stations of the list that have a price for diesel and a price for 95, and the stored stations that have both. Diesel and 95 are the fuel groups of the bot. When the list count is less than 90 % of the stored count, the run SHALL NOT change the store, SHALL log both counts, and SHALL exit with a non-zero status. A station without both prices SHALL still be stored.
 
 #### Scenario: A truncated list
 
-- **GIVEN** a store with 100 stations
-- **WHEN** the list gives 89 valid stations
+- **GIVEN** a store with 100 stations that sell diesel and 95
+- **WHEN** the list gives 89 valid stations that sell diesel and 95
 - **THEN** the run exits with a non-zero status, every stored row is unchanged, and the log names 89 and 100
 
 #### Scenario: A list at the limit
 
-- **GIVEN** a store with 100 stations
-- **WHEN** the list gives 90 valid stations
+- **GIVEN** a store with 100 stations that sell diesel and 95
+- **WHEN** the list gives 90 valid stations that sell diesel and 95
 - **THEN** the run exits with the status 0 and the store holds those 90 stations
 
 #### Scenario: Many entries that cannot be read
 
-- **GIVEN** a store with 100 stations
-- **WHEN** the list has 100 entries and 11 of them are skipped
+- **GIVEN** a store with 100 stations that sell diesel and 95
+- **WHEN** the list has 100 entries that sell diesel and 95, and 11 of them are skipped
 - **THEN** the run exits with a non-zero status and every stored row is unchanged
+
+#### Scenario: A list without prices
+
+- **GIVEN** a store with 100 stations that sell diesel and 95
+- **WHEN** the list gives 100 valid stations and none of them has a price for 95
+- **THEN** the run exits with a non-zero status, every stored row is unchanged, and the log names 0 and 100
+
+#### Scenario: Stored stations without both prices do not count
+
+- **GIVEN** a store with 100 stations that sell diesel only
+- **WHEN** the list gives 2 valid stations that sell diesel and 95
+- **THEN** the run exits with the status 0 and the store holds those 2 stations
 
 #### Scenario: The first run
 
 - **GIVEN** an empty store
-- **WHEN** the list gives 2 valid stations
+- **WHEN** the list gives 2 valid stations that sell diesel and 95
 - **THEN** the run exits with the status 0 and the store holds those 2 stations
 
 ### Requirement: The run logs the feed date and the counts

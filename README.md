@@ -115,8 +115,9 @@ https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburan
 in one request. It replaces the stored stations with that list. The source
 updates its prices every half hour.
 
-When the list has fewer than 90 % of the stored stations, the run changes
-nothing and exits with a non-zero status. The bot then keeps the old
+The run counts the stations that sell both diesel and 95, in the list and in
+the store. When the list has fewer than 90 % of the stored count, the run
+changes nothing and exits with a non-zero status. The bot then keeps the old
 stations until a later run gets a full list.
 
 ## Tests

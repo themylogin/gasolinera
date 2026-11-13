@@ -6,10 +6,11 @@ import logging
 import sys
 
 import httpx
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, insert, select
 
 from . import db
 from .config import config
+from .fuels import group_price
 from .models import GasStation, GasStationArea
 
 __all__ = ["ParseError", "main", "parse_entry", "stations_in_area", "update"]
@@ -127,10 +128,11 @@ async def update(transport=None):
         return 1
 
     async with db.Session() as session, session.begin():
-        stored = await session.scalar(select(func.count()).select_from(GasStation))
-        if len(stations) * 10 < stored * 9:
-            logger.error("The list has %d stations, fewer than 90%% of the %d stored ones; the store is unchanged",
-                         len(stations), stored)
+        stored = sum(1 for prices in await session.scalars(select(GasStation.prices)) if _is_valid(prices))
+        listed = sum(1 for station in stations if _is_valid(station["prices"]))
+        if listed * 10 < stored * 9:
+            logger.error("The list has %d stations with diesel and 95, fewer than 90%% of the %d stored ones; "
+                         "the store is unchanged", listed, stored)
             return 1
         await session.execute(delete(GasStation))
         await session.execute(insert(GasStation), stations)
@@ -138,6 +140,10 @@ async def update(transport=None):
     logger.info("Feed of %s: %d entries, %d stored, %d skipped",
                 feed_date, entry_count, len(stations), entry_count - len(stations))
     return 0
+
+
+def _is_valid(prices):
+    return group_price(prices, "diesel") is not None and group_price(prices, "gasoline_95") is not None
 
 
 def _utcnow():
